@@ -62,10 +62,18 @@ class BlockerRepository(private val serverUrl: String) {
     suspend fun updateConfig(
         blockedPackages: List<String>? = null,
         blockedKeywords: List<String>? = null,
-        blockedWebsites: List<String>? = null
+        blockedWebsites: List<String>? = null,
+        whitelistedPackages: List<String>? = null,
+        whitelistedWebsites: List<String>? = null
     ): Result<SessionState> {
         return try {
-            val request = ConfigRequest(blockedPackages, blockedKeywords, blockedWebsites)
+            val request = ConfigRequest(
+                blockedPackages,
+                blockedKeywords,
+                blockedWebsites,
+                whitelistedPackages,
+                whitelistedWebsites
+            )
             val response = apiService.updateConfig(request)
             if (response.success) {
                 Result.success(response.data)

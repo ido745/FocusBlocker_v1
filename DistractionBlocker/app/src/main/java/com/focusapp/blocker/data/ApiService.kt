@@ -13,7 +13,9 @@ data class SessionState(
     val isSessionActive: Boolean,
     val blockedPackages: List<String>,
     val blockedKeywords: List<String>,
-    val blockedWebsites: List<String>
+    val blockedWebsites: List<String>,
+    val whitelistedPackages: List<String> = emptyList(),
+    val whitelistedWebsites: List<String> = emptyList()
 )
 
 data class ToggleResponse(
@@ -29,7 +31,9 @@ data class ToggleData(
 data class ConfigRequest(
     val blockedPackages: List<String>? = null,
     val blockedKeywords: List<String>? = null,
-    val blockedWebsites: List<String>? = null
+    val blockedWebsites: List<String>? = null,
+    val whitelistedPackages: List<String>? = null,
+    val whitelistedWebsites: List<String>? = null
 )
 
 data class ConfigResponse(

@@ -16,6 +16,8 @@ data class UiState(
     val blockedPackages: Set<String> = setOf(),
     val blockedKeywords: Set<String> = setOf(),
     val blockedWebsites: Set<String> = setOf(),
+    val whitelistedPackages: Set<String> = setOf(),
+    val whitelistedWebsites: Set<String> = setOf(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null
@@ -34,29 +36,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadPreferences() {
+        // CRITICAL FIX: Only load server URL from preferences
+        // All blocked/whitelisted items come from the backend to avoid overwriting
         viewModelScope.launch {
             preferencesManager.serverUrl.collect { url ->
                 _uiState.value = _uiState.value.copy(serverUrl = url)
                 repository = BlockerRepository(url)
+                // Fetch current state from backend (don't sync local to backend)
                 fetchStatus()
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesManager.blockedPackages.collect { packages ->
-                _uiState.value = _uiState.value.copy(blockedPackages = packages)
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesManager.blockedKeywords.collect { keywords ->
-                _uiState.value = _uiState.value.copy(blockedKeywords = keywords)
-            }
-        }
-
-        viewModelScope.launch {
-            preferencesManager.blockedWebsites.collect { websites ->
-                _uiState.value = _uiState.value.copy(blockedWebsites = websites)
             }
         }
     }
@@ -74,17 +61,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
 
             repository?.getStatus()?.onSuccess { state ->
+                // CRITICAL: Load from backend, don't overwrite with local empty data
                 _uiState.value = _uiState.value.copy(
                     isSessionActive = state.isSessionActive,
                     blockedPackages = state.blockedPackages.toSet(),
                     blockedKeywords = state.blockedKeywords.toSet(),
                     blockedWebsites = state.blockedWebsites.toSet(),
+                    whitelistedPackages = state.whitelistedPackages.toSet(),
+                    whitelistedWebsites = state.whitelistedWebsites.toSet(),
                     isLoading = false
                 )
+                // Save to local preferences so they persist
+                preferencesManager.saveBlockedPackages(state.blockedPackages.toSet())
+                preferencesManager.saveBlockedKeywords(state.blockedKeywords.toSet())
+                preferencesManager.saveBlockedWebsites(state.blockedWebsites.toSet())
             }?.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     errorMessage = "Failed to connect to server: ${error.message}"
+                )
+            }
+        }
+    }
+
+    fun toggleSession() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+
+            repository?.toggleSession()?.onSuccess { isActive ->
+                _uiState.value = _uiState.value.copy(
+                    isSessionActive = isActive,
+                    isLoading = false,
+                    successMessage = if (isActive) "Focus session started!" else "Focus session stopped"
+                )
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = "Failed to toggle session: ${error.message}"
                 )
             }
         }
@@ -150,12 +163,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Whitelist management functions
+    fun addWhitelistedPackage(packageName: String) {
+        if (packageName.isBlank()) return
+
+        val updated = _uiState.value.whitelistedPackages + packageName
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(whitelistedPackages = updated)
+            syncWithServer()
+        }
+    }
+
+    fun removeWhitelistedPackage(packageName: String) {
+        val updated = _uiState.value.whitelistedPackages - packageName
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(whitelistedPackages = updated)
+            syncWithServer()
+        }
+    }
+
+    fun addWhitelistedWebsite(website: String) {
+        if (website.isBlank()) return
+
+        val updated = _uiState.value.whitelistedWebsites + website.lowercase()
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(whitelistedWebsites = updated)
+            syncWithServer()
+        }
+    }
+
+    fun removeWhitelistedWebsite(website: String) {
+        val updated = _uiState.value.whitelistedWebsites - website
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(whitelistedWebsites = updated)
+            syncWithServer()
+        }
+    }
+
     private fun syncWithServer() {
         viewModelScope.launch {
             repository?.updateConfig(
                 blockedPackages = _uiState.value.blockedPackages.toList(),
                 blockedKeywords = _uiState.value.blockedKeywords.toList(),
-                blockedWebsites = _uiState.value.blockedWebsites.toList()
+                blockedWebsites = _uiState.value.blockedWebsites.toList(),
+                whitelistedPackages = _uiState.value.whitelistedPackages.toList(),
+                whitelistedWebsites = _uiState.value.whitelistedWebsites.toList()
             )?.onSuccess {
                 _uiState.value = _uiState.value.copy(
                     successMessage = "Configuration synced with server"

@@ -26,6 +26,14 @@ let state = {
     'instagram.com',
     'twitter.com',
     'reddit.com'
+  ],
+  whitelistedPackages: [
+    'com.focusapp.blocker',  // Always whitelist our own app
+    'com.android.settings'    // Settings app
+  ],
+  whitelistedWebsites: [
+    'localhost',
+    '10.0.2.2'  // Emulator localhost
   ]
 };
 
@@ -51,9 +59,9 @@ app.post('/toggle', (req, res) => {
   });
 });
 
-// POST /config - Updates blocked apps, keywords, and websites
+// POST /config - Updates blocked apps, keywords, websites, and whitelists
 app.post('/config', (req, res) => {
-  const { blockedPackages, blockedKeywords, blockedWebsites } = req.body;
+  const { blockedPackages, blockedKeywords, blockedWebsites, whitelistedPackages, whitelistedWebsites } = req.body;
 
   if (blockedPackages !== undefined) {
     state.blockedPackages = blockedPackages;
@@ -65,6 +73,17 @@ app.post('/config', (req, res) => {
 
   if (blockedWebsites !== undefined) {
     state.blockedWebsites = blockedWebsites;
+  }
+
+  if (whitelistedPackages !== undefined) {
+    // Always ensure our own app is whitelisted
+    const ensuredWhitelist = new Set(whitelistedPackages);
+    ensuredWhitelist.add('com.focusapp.blocker');
+    state.whitelistedPackages = Array.from(ensuredWhitelist);
+  }
+
+  if (whitelistedWebsites !== undefined) {
+    state.whitelistedWebsites = whitelistedWebsites;
   }
 
   console.log(`[${new Date().toISOString()}] Configuration updated`);

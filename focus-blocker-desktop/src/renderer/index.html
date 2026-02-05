@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Focus Blocker</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .login-screen {
+            text-align: center;
+        }
+        .login-screen h1 {
+            color: #333;
+        }
+        .btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .btn:hover {
+            background: #357ae8;
+        }
+        .btn-danger {
+            background: #d32f2f;
+        }
+        .btn-danger:hover {
+            background: #b71c1c;
+        }
+        .btn-success {
+            background: #4caf50;
+        }
+        .session-card {
+            background: #e8f5e9;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .session-card.inactive {
+            background: #fff3e0;
+        }
+        .devices-list {
+            margin: 20px 0;
+        }
+        .device-item {
+            background: #f5f5f5;
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .device-item input[type="checkbox"] {
+            margin-right: 10px;
+        }
+        .blocklist-section {
+            margin: 20px 0;
+        }
+        .blocklist-input {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .blocklist-input input {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .blocked-item {
+            background: #ffebee;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .remove-btn {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Login Screen -->
+        <div id="loginScreen" class="login-screen">
+            <h1>🎯 Focus Blocker</h1>
+            <p>Sign in to sync your blocklists across devices</p>
+
+            <div id="loginForm" class="hidden" style="margin: 20px auto; max-width: 400px; text-align: left;">
+                <div style="margin: 0 0 20px 0; text-align: center;">
+                    <h3 id="formTitle">Sign In</h3>
+                    <p style="color: #666; font-size: 14px;">
+                        <span id="switchText">Don't have an account?</span>
+                        <a href="#" onclick="toggleAuthMode(); return false;" style="color: #4285f4; text-decoration: none;">
+                            <span id="switchLink">Register</span>
+                        </a>
+                    </p>
+                </div>
+
+                <div style="margin: 10px 0;">
+                    <label>Email:</label>
+                    <input type="email" id="emailInput" placeholder="your@email.com"
+                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div style="margin: 10px 0;">
+                    <label>Password:</label>
+                    <input type="password" id="passwordInput" placeholder="Enter password"
+                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div id="nameField" class="hidden" style="margin: 10px 0;">
+                    <label>Name:</label>
+                    <input type="text" id="nameInput" placeholder="Your Name"
+                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div style="margin: 20px 0; text-align: center;">
+                    <button class="btn" id="submitBtn" onclick="submitAuth()">Sign In</button>
+                    <button class="btn" onclick="cancelLogin()" style="background: #999;">Cancel</button>
+                </div>
+            </div>
+
+            <button id="loginBtn" class="btn" onclick="showLoginForm()">Sign In / Register</button>
+        </div>
+
+        <!-- Main App -->
+        <div id="mainApp" class="hidden">
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                <div>
+                    <h1 style="margin-bottom: 2px;">🎯 Focus Blocker</h1>
+                    <p id="userEmail" style="margin: 0 0 10px 0; color: #888; font-size: 13px;"></p>
+                </div>
+            </div>
+
+            <!-- Session Control -->
+            <div id="sessionCard" class="session-card">
+                <h2 id="sessionStatus">Session Inactive</h2>
+                <button id="sessionBtn" class="btn" onclick="toggleSession()">Start Focus Session</button>
+            </div>
+
+            <!-- Device Selection -->
+            <div class="devices-list">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="margin: 0;">📱 Select Devices for Session</h3>
+                    <button onclick="loadDevices()" style="background: none; border: 1px solid #ddd; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 14px;" title="Refresh devices">🔄</button>
+                </div>
+                <label>
+                    <input type="checkbox" id="allDevices" checked onchange="toggleAllDevices()">
+                    All Devices
+                </label>
+                <div id="devicesList"></div>
+            </div>
+
+            <!-- Blocklist Management -->
+            <div class="blocklist-section">
+                <h3>🚫 Blocked Websites</h3>
+                <div class="blocklist-input">
+                    <input type="text" id="websiteInput" placeholder="facebook.com">
+                    <button class="btn" onclick="addWebsite()">Add</button>
+                </div>
+                <div id="blockedWebsites"></div>
+            </div>
+
+            <button class="btn btn-danger" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        let devices = [];
+        let blockedWebsites = [];
+        let blockedPackages = [];
+        let blockedKeywords = [];
+        let currentSession = null;
+        let currentDeviceId = null;
+
+        // Initialize
+        async function init() {
+            console.log('🚀 Initializing app...');
+            try {
+                const isAuth = await ipcRenderer.invoke('is-authenticated');
+                console.log('✅ Auth status:', isAuth);
+
+                if (isAuth) {
+                    showMainApp();
+                    currentDeviceId = await ipcRenderer.invoke('get-device-id');
+                    await loadUserInfo();
+                    await loadDevices();
+                    await loadConfig();
+                    await updateSession();
+                    setInterval(updateSession, 3000);
+                } else {
+                    showLoginScreen();
+                }
+            } catch (error) {
+                console.error('❌ Initialization error:', error);
+                showLoginScreen();
+            }
+        }
+
+        function showLoginScreen() {
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('mainApp').classList.add('hidden');
+        }
+
+        function showMainApp() {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('mainApp').classList.remove('hidden');
+        }
+
+        // Authentication
+        let isRegisterMode = false;
+
+        function showLoginForm() {
+            document.getElementById('loginBtn').classList.add('hidden');
+            document.getElementById('loginForm').classList.remove('hidden');
+            document.getElementById('emailInput').focus();
+            isRegisterMode = false;
+            updateAuthMode();
+        }
+
+        function cancelLogin() {
+            document.getElementById('loginBtn').classList.remove('hidden');
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('emailInput').value = '';
+            document.getElementById('passwordInput').value = '';
+            document.getElementById('nameInput').value = '';
+        }
+
+        function toggleAuthMode() {
+            isRegisterMode = !isRegisterMode;
+            updateAuthMode();
+        }
+
+        function updateAuthMode() {
+            const formTitle = document.getElementById('formTitle');
+            const submitBtn = document.getElementById('submitBtn');
+            const nameField = document.getElementById('nameField');
+            const switchText = document.getElementById('switchText');
+            const switchLink = document.getElementById('switchLink');
+
+            if (isRegisterMode) {
+                formTitle.textContent = 'Register';
+                submitBtn.textContent = 'Register';
+                nameField.classList.remove('hidden');
+                switchText.textContent = 'Already have an account?';
+                switchLink.textContent = 'Sign In';
+            } else {
+                formTitle.textContent = 'Sign In';
+                submitBtn.textContent = 'Sign In';
+                nameField.classList.add('hidden');
+                switchText.textContent = "Don't have an account?";
+                switchLink.textContent = 'Register';
+            }
+        }
+
+        async function submitAuth() {
+            const email = document.getElementById('emailInput').value.trim();
+            const password = document.getElementById('passwordInput').value.trim();
+            const name = document.getElementById('nameInput').value.trim();
+
+            if (!email || !password) {
+                alert('Please enter both email and password');
+                return;
+            }
+
+            if (isRegisterMode && !name) {
+                alert('Please enter your name');
+                return;
+            }
+
+            try {
+                const result = isRegisterMode
+                    ? await ipcRenderer.invoke('register', { email, password, name })
+                    : await ipcRenderer.invoke('login', { email, password });
+
+                if (result.success) {
+                    showMainApp();
+                    currentDeviceId = await ipcRenderer.invoke('get-device-id');
+                    document.getElementById('userEmail').textContent = email;
+                    await loadDevices();
+                    await loadConfig();
+                    await updateSession();
+                    setInterval(updateSession, 3000);
+                } else {
+                    alert((isRegisterMode ? 'Registration' : 'Login') + ' failed: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert((isRegisterMode ? 'Registration' : 'Login') + ' error: ' + error.message);
+                console.error('Auth error:', error);
+            }
+        }
+
+        async function logout() {
+            await ipcRenderer.invoke('logout');
+            document.getElementById('userEmail').textContent = '';
+            showLoginScreen();
+        }
+
+        // Device Management
+        async function loadDevices() {
+            const result = await ipcRenderer.invoke('get-devices');
+            if (result.success) {
+                devices = result.devices;
+                renderDevices();
+            }
+        }
+
+        function renderDevices() {
+            const container = document.getElementById('devicesList');
+            container.innerHTML = devices.map(device => {
+                const isThis = device.id === currentDeviceId;
+                const thisLabel = isThis ? ' <strong style="color: #4CAF50;">(This device)</strong>' : '';
+                return `
+                <div class="device-item">
+                    <label>
+                        <input type="checkbox" value="${device.id}" class="device-checkbox">
+                        ${device.name}${thisLabel} (${device.type} - ${device.platform})
+                    </label>
+                    <span>${device.isOnline ? '🟢 Online' : '🔴 Offline'}</span>
+                </div>
+            `}).join('');
+        }
+
+        function toggleAllDevices() {
+            const checkboxes = document.querySelectorAll('.device-checkbox');
+            const allChecked = document.getElementById('allDevices').checked;
+
+            checkboxes.forEach(cb => cb.disabled = allChecked);
+        }
+
+        function getSelectedDevices() {
+            const allDevices = document.getElementById('allDevices').checked;
+            if (allDevices) return 'all';
+
+            const checkboxes = document.querySelectorAll('.device-checkbox:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        // Configuration
+        async function loadConfig() {
+            const result = await ipcRenderer.invoke('get-config');
+            if (result.success) {
+                blockedWebsites = result.blocklists.websites || [];
+                blockedPackages = result.blocklists.packages || [];
+                blockedKeywords = result.blocklists.keywords || [];
+                renderBlockedWebsites();
+            }
+        }
+
+        async function addWebsite() {
+            const input = document.getElementById('websiteInput');
+            const website = input.value.trim();
+
+            if (!website) return;
+
+            blockedWebsites.push(website);
+            await saveConfig();
+            input.value = '';
+            renderBlockedWebsites();
+        }
+
+        async function removeWebsite(website) {
+            blockedWebsites = blockedWebsites.filter(w => w !== website);
+            await saveConfig();
+            renderBlockedWebsites();
+        }
+
+        function renderBlockedWebsites() {
+            const container = document.getElementById('blockedWebsites');
+            container.innerHTML = blockedWebsites.map(website => `
+                <div class="blocked-item">
+                    <span>${website}</span>
+                    <button class="remove-btn" onclick="removeWebsite('${website}')">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        async function saveConfig() {
+            await ipcRenderer.invoke('update-config', {
+                blockedWebsites
+            });
+        }
+
+        // Session Management
+        async function toggleSession() {
+            if (currentSession) {
+                await ipcRenderer.invoke('stop-session');
+            } else {
+                const targetDevices = getSelectedDevices();
+                await ipcRenderer.invoke('start-session', {
+                    targetDevices,
+                    blockedWebsites,
+                    blockedPackages,
+                    blockedKeywords
+                });
+            }
+            await updateSession();
+        }
+
+        async function updateSession() {
+            currentSession = await ipcRenderer.invoke('get-current-session');
+            updateSessionUI();
+        }
+
+        function updateSessionUI() {
+            const card = document.getElementById('sessionCard');
+            const status = document.getElementById('sessionStatus');
+            const btn = document.getElementById('sessionBtn');
+
+            if (currentSession && currentSession.isActive) {
+                card.classList.remove('inactive');
+                status.textContent = '🟢 Focus Session Active';
+                btn.textContent = 'Stop Session';
+                btn.className = 'btn btn-danger';
+            } else {
+                card.classList.add('inactive');
+                status.textContent = '🔴 Session Inactive';
+                btn.textContent = 'Start Focus Session';
+                btn.className = 'btn btn-success';
+            }
+        }
+
+        // Listen for session updates from main process
+        ipcRenderer.on('session-updated', (event, session) => {
+            currentSession = session;
+            updateSessionUI();
+        });
+
+        // User Info
+        async function loadUserInfo() {
+            try {
+                const result = await ipcRenderer.invoke('get-user-info');
+                if (result.success && result.user) {
+                    document.getElementById('userEmail').textContent = result.user.email;
+                }
+            } catch (error) {
+                console.error('Failed to load user info:', error);
+            }
+        }
+
+        // Initialize on load
+        init();
+    </script>
+</body>
+</html>

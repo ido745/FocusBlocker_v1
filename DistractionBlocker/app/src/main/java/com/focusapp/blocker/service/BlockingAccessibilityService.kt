@@ -7,7 +7,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
-import com.focusapp.blocker.data.BlockerRepository
+import com.focusapp.blocker.data.AuthManager
+import com.focusapp.blocker.data.AuthenticatedRepository
 import com.focusapp.blocker.data.PreferencesManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,8 @@ class BlockingAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
 
     private lateinit var preferencesManager: PreferencesManager
-    private var repository: BlockerRepository? = null
+    private lateinit var authManager: AuthManager
+    private var repository: AuthenticatedRepository? = null
 
     private var isSessionActive = false
     private var blockedPackages = setOf<String>()
@@ -44,6 +46,7 @@ class BlockingAccessibilityService : AccessibilityService() {
         super.onCreate()
         Log.d(TAG, "Service created")
         preferencesManager = PreferencesManager(applicationContext)
+        authManager = AuthManager(applicationContext)
         startStatusPolling()
     }
 
@@ -151,28 +154,41 @@ class BlockingAccessibilityService : AccessibilityService() {
             Log.d(TAG, "Initial blocked keywords: ${blockedKeywords.size}")
             Log.d(TAG, "Initial blocked websites: ${blockedWebsites.size}")
 
-            repository = BlockerRepository(serverUrl)
+            repository = AuthenticatedRepository(applicationContext, serverUrl)
 
             // Poll server status every 3 seconds
             while (true) {
                 try {
-                    val result = repository?.getStatus()
-                    result?.onSuccess { state ->
-                        val wasActive = isSessionActive
-                        isSessionActive = state.isSessionActive
-                        blockedPackages = state.blockedPackages.toSet()
-                        blockedKeywords = state.blockedKeywords.toSet()
-                        blockedWebsites = state.blockedWebsites.toSet()
-                        whitelistedPackages = state.whitelistedPackages.toSet()
-                        whitelistedWebsites = state.whitelistedWebsites.toSet()
+                    val token = authManager.authToken.first()
+                    if (!token.isNullOrBlank()) {
+                        // Authenticated: use the multi-device session endpoint
+                        val result = repository?.getActiveSession()
+                        result?.onSuccess { session ->
+                            val wasActive = isSessionActive
+                            isSessionActive = session?.isActive == true
 
-                        if (wasActive != isSessionActive) {
-                            Log.w(TAG, "🔄 Session state changed: ${if (isSessionActive) "ACTIVE" else "INACTIVE"}")
+                            if (session != null) {
+                                blockedPackages = session.blockedPackages.orEmpty().toSet()
+                                blockedKeywords = session.blockedKeywords.orEmpty().toSet()
+                                blockedWebsites = session.blockedWebsites.orEmpty().toSet()
+                                whitelistedPackages = session.whitelistedPackages.orEmpty().toSet()
+                                whitelistedWebsites = session.whitelistedWebsites.orEmpty().toSet()
+                            } else {
+                                isSessionActive = false
+                            }
+
+                            if (wasActive != isSessionActive) {
+                                Log.w(TAG, "🔄 Session state changed: ${if (isSessionActive) "ACTIVE" else "INACTIVE"}")
+                            }
+
+                            Log.d(TAG, "✅ Status: Active=$isSessionActive | Blocked=${blockedPackages.size} | Whitelisted=${whitelistedPackages.size}")
+                        }?.onFailure { error ->
+                            Log.e(TAG, "❌ Failed to fetch session: ${error.message}", error)
                         }
-
-                        Log.d(TAG, "✅ Status: Active=$isSessionActive | Blocked=${blockedPackages.size} | Whitelisted=${whitelistedPackages.size}")
-                    }?.onFailure { error ->
-                        Log.e(TAG, "❌ Failed to fetch status: ${error.message}", error)
+                    } else {
+                        // Not authenticated - no blocking
+                        isSessionActive = false
+                        Log.d(TAG, "⏸️ Not authenticated, blocking inactive")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Error in status polling: ${e.message}", e)

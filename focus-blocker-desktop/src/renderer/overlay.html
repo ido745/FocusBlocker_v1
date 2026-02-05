@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Focus Mode</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #00FF00;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .overlay-content {
+            text-align: center;
+            color: #000;
+        }
+        .overlay-content h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        .overlay-content p {
+            font-size: 24px;
+            margin-bottom: 40px;
+        }
+        .blocked-url {
+            font-family: monospace;
+            background: rgba(0,0,0,0.1);
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .emergency-btn {
+            background: #d32f2f;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        .emergency-btn:hover {
+            background: #b71c1c;
+        }
+    </style>
+</head>
+<body>
+    <div class="overlay-content">
+        <h1>🚫 Website Blocked</h1>
+        <p>This website is blocked during your focus session.</p>
+        <div class="blocked-url" id="blockedUrl">Loading...</div>
+        <p>Close your browser or visit an allowed website to continue.</p>
+        <button class="emergency-btn" onclick="emergencyStop()">End Session (Emergency)</button>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        ipcRenderer.on('update-blocked-url', (event, url) => {
+            document.getElementById('blockedUrl').textContent = url;
+        });
+
+        async function emergencyStop() {
+            if (confirm('Are you sure you want to end your focus session?')) {
+                await ipcRenderer.invoke('emergency-stop');
+            }
+        }
+    </script>
+</body>
+</html>

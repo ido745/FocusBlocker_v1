@@ -19,6 +19,9 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -36,7 +39,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
-import com.focusapp.blocker.ui.MainViewModel
+import com.focusapp.blocker.ui.AuthViewModel
+import com.focusapp.blocker.ui.LoginScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -47,14 +51,33 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
+                val authViewModel: AuthViewModel = viewModel()
+                val authState by authViewModel.authState.collectAsState()
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
-                        onOpenAccessibilitySettings = { openAccessibilitySettings() },
-                        isServiceEnabled = { isAccessibilityServiceEnabled() }
-                    )
+                    if (authState.isAuthenticated) {
+                        // User is logged in, show main app
+                        MainScreen(
+                            viewModel = authViewModel,
+                            onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                            isServiceEnabled = { isAccessibilityServiceEnabled() }
+                        )
+                    } else {
+                        // User not logged in, show login screen
+                        LoginScreen(
+                            onRegisterClick = { email, password, name ->
+                                authViewModel.register(email, password, name)
+                            },
+                            onLoginClick = { email, password ->
+                                authViewModel.login(email, password)
+                            },
+                            isLoading = authState.isLoading,
+                            errorMessage = authState.errorMessage
+                        )
+                    }
                 }
             }
         }
@@ -79,11 +102,12 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(
-    viewModel: MainViewModel = viewModel(),
+    viewModel: AuthViewModel,
     onOpenAccessibilitySettings: () -> Unit,
     isServiceEnabled: () -> Boolean
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val authState by viewModel.authState.collectAsState()
     var serviceEnabled by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(0) }
     val pagerState = rememberPagerState(pageCount = { 3 })
@@ -102,25 +126,45 @@ fun MainScreen(
         }
     }
 
+    // Poll for active sessions
+    LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.fetchActiveSession()
+            delay(3000)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        when (selectedTab) {
-                            0 -> "Home"
-                            1 -> "Block List"
-                            2 -> "Whitelist"
-                            else -> "Focus Blocker"
+                    Column {
+                        Text(
+                            when (selectedTab) {
+                                0 -> "Home"
+                                1 -> "Block List"
+                                2 -> "Whitelist"
+                                else -> "Focus Blocker"
+                            }
+                        )
+                        authState.userEmail?.let { email ->
+                            Text(
+                                email,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
                         }
-                    )
+                    }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.fetchStatus() }) {
+                    IconButton(onClick = { viewModel.fetchConfig() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                     IconButton(onClick = onOpenAccessibilitySettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                    IconButton(onClick = { viewModel.logout() }) {
+                        Icon(Icons.Default.Close, contentDescription = "Logout")
                     }
                 }
             )
@@ -188,8 +232,8 @@ fun MainScreen(
 
 @Composable
 fun HomePage(
-    viewModel: MainViewModel,
-    uiState: com.focusapp.blocker.ui.UiState,
+    viewModel: AuthViewModel,
+    uiState: com.focusapp.blocker.ui.AppUiState,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit
 ) {
@@ -205,6 +249,19 @@ fun HomePage(
                 isSessionActive = uiState.isSessionActive,
                 isLoading = uiState.isLoading,
                 onToggle = { viewModel.toggleSession() }
+            )
+        }
+
+        // Device Selection Section
+        item {
+            DeviceSelectionCard(
+                devices = uiState.devices,
+                currentDeviceId = uiState.currentDeviceId,
+                allDevicesSelected = uiState.allDevicesSelected,
+                selectedDeviceIds = uiState.selectedDeviceIds,
+                onToggleAllDevices = { viewModel.toggleAllDevices() },
+                onToggleDevice = { viewModel.toggleDevice(it) },
+                onRefresh = { viewModel.fetchDevices() }
             )
         }
 
@@ -233,7 +290,7 @@ fun HomePage(
 }
 
 @Composable
-fun BlockPage(viewModel: MainViewModel, uiState: com.focusapp.blocker.ui.UiState) {
+fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
     var showAppPicker by remember { mutableStateOf(false) }
 
     if (showAppPicker) {
@@ -324,7 +381,7 @@ fun BlockPage(viewModel: MainViewModel, uiState: com.focusapp.blocker.ui.UiState
 }
 
 @Composable
-fun WhitelistPage(viewModel: MainViewModel, uiState: com.focusapp.blocker.ui.UiState) {
+fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
     var showAppPicker by remember { mutableStateOf(false) }
 
     if (showAppPicker) {
@@ -481,19 +538,13 @@ fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "This app requires Accessibility Service permissions to block apps and websites.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF424242)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
                 "How to enable:",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF424242)
             )
             Text(
-                "1. Tap the button below\n2. Find \"Focus Blocker\" in the list\n3. Toggle it ON\n4. Accept the permission",
+                "1. Tap the button below\n2. Go to \"downloaded apps -> Focus Blocker\"\n3. Toggle \"Use Focus Blocker\" ON",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -566,7 +617,7 @@ fun ServiceStatusCard(onOpenSettings: () -> Unit, isServiceEnabled: Boolean) {
 }
 
 @Composable
-fun StatsCard(uiState: com.focusapp.blocker.ui.UiState) {
+fun StatsCard(uiState: com.focusapp.blocker.ui.AppUiState) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
@@ -613,6 +664,127 @@ fun StatItem(label: String, value: String) {
             style = MaterialTheme.typography.bodySmall,
             color = Color.Gray
         )
+    }
+}
+
+@Composable
+fun DeviceSelectionCard(
+    devices: List<com.focusapp.blocker.data.Device>,
+    currentDeviceId: String?,
+    allDevicesSelected: Boolean,
+    selectedDeviceIds: Set<String>,
+    onToggleAllDevices: () -> Unit,
+    onToggleDevice: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Devices, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Select Devices for Session",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh devices", modifier = Modifier.size(20.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // All Devices checkbox
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleAllDevices() }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = allDevicesSelected,
+                    onCheckedChange = { onToggleAllDevices() }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "All Devices",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Individual devices
+            if (devices.isEmpty()) {
+                Text(
+                    "No devices registered yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(start = 48.dp)
+                )
+            } else {
+                devices.forEach { device ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !allDevicesSelected) { onToggleDevice(device.id) }
+                            .padding(vertical = 4.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Checkbox(
+                                checked = allDevicesSelected || selectedDeviceIds.contains(device.id),
+                                onCheckedChange = { onToggleDevice(device.id) },
+                                enabled = !allDevicesSelected
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                if (device.type == "android") Icons.Default.PhoneAndroid else Icons.Default.Computer,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = Color.Gray
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val isCurrentDevice = device.id == currentDeviceId
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        device.name,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    if (isCurrentDevice) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            "(This device)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "${device.type} - ${device.platform}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        Text(
+                            if (device.isOnline) "Online" else "Offline",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (device.isOnline) Color(0xFF4CAF50) else Color.Gray
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

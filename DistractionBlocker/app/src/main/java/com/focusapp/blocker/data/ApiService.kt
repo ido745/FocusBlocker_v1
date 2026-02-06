@@ -130,14 +130,14 @@ data class ConfigGetResponse(
 )
 
 data class Blocklists(
-    val websites: List<String>,
-    val packages: List<String>,
-    val keywords: List<String>
+    val websites: List<String>? = null,
+    val packages: List<String>? = null,
+    val keywords: List<String>? = null
 )
 
 data class Whitelists(
-    val websites: List<String>,
-    val packages: List<String>
+    val websites: List<String>? = null,
+    val packages: List<String>? = null
 )
 
 data class ConfigUpdateRequest(

@@ -105,6 +105,23 @@
         .hidden {
             display: none;
         }
+        .refresh-btn {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #666;
+            transition: all 0.2s;
+        }
+        .refresh-btn:hover {
+            background: #e8e8e8;
+            border-color: #ccc;
+        }
+        .refresh-btn:active {
+            background: #ddd;
+        }
     </style>
 </head>
 <body>
@@ -166,9 +183,9 @@
 
             <!-- Device Selection -->
             <div class="devices-list">
-                <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
                     <h3 style="margin: 0;">📱 Select Devices for Session</h3>
-                    <button onclick="loadDevices()" style="background: none; border: 1px solid #ddd; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 14px;" title="Refresh devices">🔄</button>
+                    <button class="refresh-btn" onclick="refreshDevices()" title="Refresh device list">Refresh</button>
                 </div>
                 <label>
                     <input type="checkbox" id="allDevices" checked onchange="toggleAllDevices()">
@@ -211,7 +228,8 @@
                 if (isAuth) {
                     showMainApp();
                     currentDeviceId = await ipcRenderer.invoke('get-device-id');
-                    await loadUserInfo();
+                    const userLoaded = await loadUserInfo();
+                    if (!userLoaded) return; // Auth failed, already showing login
                     await loadDevices();
                     await loadConfig();
                     await updateSession();
@@ -330,7 +348,17 @@
             if (result.success) {
                 devices = result.devices;
                 renderDevices();
+                toggleAllDevices(); // Apply disabled state to checkboxes
             }
+        }
+
+        async function refreshDevices() {
+            const btn = document.querySelector('.refresh-btn');
+            btn.textContent = 'Refreshing...';
+            btn.disabled = true;
+            await loadDevices();
+            btn.textContent = 'Refresh';
+            btn.disabled = false;
         }
 
         function renderDevices() {
@@ -460,9 +488,17 @@
                 const result = await ipcRenderer.invoke('get-user-info');
                 if (result.success && result.user) {
                     document.getElementById('userEmail').textContent = result.user.email;
+                    return true;
+                } else {
+                    // Auth failed - go back to login
+                    console.log('Auth verification failed, returning to login');
+                    showLoginScreen();
+                    return false;
                 }
             } catch (error) {
                 console.error('Failed to load user info:', error);
+                showLoginScreen();
+                return false;
             }
         }
 

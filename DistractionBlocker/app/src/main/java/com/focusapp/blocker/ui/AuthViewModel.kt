@@ -163,11 +163,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
             repository?.getConfig()?.onSuccess { (blocklists, whitelists) ->
                 _uiState.value = _uiState.value.copy(
-                    blockedPackages = blocklists.packages.toSet(),
-                    blockedKeywords = blocklists.keywords.toSet(),
-                    blockedWebsites = blocklists.websites.toSet(),
-                    whitelistedPackages = whitelists.packages.toSet(),
-                    whitelistedWebsites = whitelists.websites.toSet(),
+                    blockedPackages = blocklists.packages.orEmpty().toSet(),
+                    blockedKeywords = blocklists.keywords.orEmpty().toSet(),
+                    blockedWebsites = blocklists.websites.orEmpty().toSet(),
+                    whitelistedPackages = whitelists.packages.orEmpty().toSet(),
+                    whitelistedWebsites = whitelists.websites.orEmpty().toSet(),
                     isLoading = false
                 )
             }?.onFailure { error ->

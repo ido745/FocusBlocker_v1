@@ -79,7 +79,7 @@ class BlockingAccessibilityService : AccessibilityService() {
         }
 
         // Check if this app is whitelisted (never block whitelisted apps)
-        if (whitelistedPackages.contains(packageName)) {
+        if (isPackageWhitelisted(packageName)) {
             Log.d(TAG, "✅ Whitelisted app: $packageName - allowing")
             return
         }
@@ -91,10 +91,10 @@ class BlockingAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 1. Check if the app itself is blocked
-        if (blockedPackages.contains(packageName)) {
+        // 1. Check if the app itself is blocked (exact match or partial match)
+        if (isPackageBlocked(packageName)) {
             Log.w(TAG, "🚫 BLOCKING APP: $packageName")
-            blockApp("App is blocked during focus session: $packageName")
+            blockApp("App is blocked during focus session")
             return
         }
 
@@ -278,6 +278,40 @@ class BlockingAccessibilityService : AccessibilityService() {
         }
 
         return null
+    }
+
+    private fun isPackageBlocked(packageName: String): Boolean {
+        val pkgLower = packageName.lowercase()
+
+        Log.d(TAG, "🔍 Checking if blocked: $pkgLower against ${blockedPackages.size} blocked packages: $blockedPackages")
+
+        for (blocked in blockedPackages) {
+            val blockedLower = blocked.lowercase()
+
+            // Exact match only
+            if (pkgLower == blockedLower) {
+                Log.d(TAG, "✓ Exact match: $pkgLower == $blockedLower")
+                return true
+            }
+        }
+
+        Log.d(TAG, "✗ Not blocked: $pkgLower")
+        return false
+    }
+
+    private fun isPackageWhitelisted(packageName: String): Boolean {
+        val pkgLower = packageName.lowercase()
+
+        for (whitelisted in whitelistedPackages) {
+            val whitelistedLower = whitelisted.lowercase()
+
+            // Exact match only
+            if (pkgLower == whitelistedLower) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private fun blockApp(reason: String) {

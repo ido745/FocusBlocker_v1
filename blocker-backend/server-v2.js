@@ -434,6 +434,19 @@ app.post('/config', authenticate, (req, res) => {
     user.whitelists.packages = Array.from(ensuredWhitelist);
   }
 
+  // SYNC to any active sessions for this user
+  // This ensures that changes made during an active session take effect immediately
+  Object.values(db.sessions).forEach(session => {
+    if (session.userId === userId && session.isActive) {
+      session.blockedWebsites = user.blocklists.websites || [];
+      session.blockedPackages = user.blocklists.packages || [];
+      session.blockedKeywords = user.blocklists.keywords || [];
+      session.whitelistedWebsites = user.whitelists.websites || [];
+      session.whitelistedPackages = user.whitelists.packages || [];
+      console.log(`🔄 Active session ${session.id} updated with new blocklists`);
+    }
+  });
+
   console.log(`⚙️ Config updated for ${user.email}`);
 
   res.json({

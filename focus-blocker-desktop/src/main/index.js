@@ -5,18 +5,21 @@ const Store = require('electron-store');
 const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 const os = require('os');
+const { exec } = require('child_process');
 
 const store = new Store();
 const API_URL = 'http://127.0.0.1:3000'; // Use IPv4 instead of localhost
+const BLOCKED_REDIRECT_URL = 'https://blocked.freedom.to/';
 
 let mainWindow;
-let overlayWindow;
 let tray;
 let browserMonitorInterval;
 let sessionPollInterval;
 let currentSession = null;
 let authToken = null;
 let deviceId = null;
+let lastRedirectTime = 0; // Prevent rapid redirects
+let lastBlockedUrl = null; // Track what we last blocked
 
 // ==================================
 // APP LIFECYCLE
@@ -50,7 +53,6 @@ async function initializeApp() {
 
   // Create windows
   createMainWindow();
-  createOverlayWindow();
   createSystemTray();
 
   // If logged in, register device and start monitoring
@@ -76,7 +78,6 @@ function createMainWindow() {
       nodeIntegration: true,
       contextIsolation: false
     }
-    // icon: path.join(__dirname, '../../assets/icons/icon.png') // Add when you have an icon
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -85,34 +86,6 @@ function createMainWindow() {
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
-}
-
-function createOverlayWindow() {
-  overlayWindow = new BrowserWindow({
-    fullscreen: true,
-    alwaysOnTop: true,
-    frame: false,
-    transparent: false,
-    skipTaskbar: true,
-    closable: false,
-    backgroundColor: '#00FF00',
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
-    }
-  });
-
-  overlayWindow.loadFile(path.join(__dirname, '../renderer/overlay.html'));
-  overlayWindow.hide();
-  overlayWindow.setIgnoreMouseEvents(false);
-
-  // Prevent overlay from being closed
-  overlayWindow.on('close', (event) => {
-    if (!app.isQuitting) {
-      event.preventDefault();
-      overlayWindow.hide();
-    }
-  });
 }
 
 function createSystemTray() {
@@ -124,7 +97,6 @@ function createSystemTray() {
       const icon = nativeImage.createFromPath(iconPath);
       tray = new Tray(icon.resize({ width: 16, height: 16 }));
     } else {
-      // Create empty icon if file doesn't exist
       const icon = nativeImage.createEmpty();
       tray = new Tray(icon);
     }
@@ -137,7 +109,6 @@ function createSystemTray() {
     });
   } catch (error) {
     console.error('System tray creation error:', error);
-    // Continue without tray if it fails
   }
 }
 
@@ -176,7 +147,7 @@ function updateTrayMenu() {
 }
 
 // ==================================
-// BROWSER MONITORING
+// BROWSER MONITORING & REDIRECT
 // ==================================
 
 function startBrowserMonitoring() {
@@ -188,35 +159,52 @@ function startBrowserMonitoring() {
     try {
       const window = await activeWin();
 
-      if (!window) return;
+      if (!window) {
+        return;
+      }
 
       const isBrowser = checkIfBrowser(window.owner.name);
+      console.log('📍 Active window:', window.owner.name, '| Browser:', isBrowser, '| Title:', window.title?.substring(0, 50));
 
       if (isBrowser) {
         const url = extractUrlFromTitle(window.title);
-        console.log('🌐 Browser detected:', window.owner.name, '| Title:', window.title, '| URL:', url);
+        console.log('🌐 Extracted URL:', url);
+
+        console.log('📊 Session status:', currentSession ? `Active: ${currentSession.isActive}, Blocked sites: ${JSON.stringify(currentSession.blockedWebsites)}` : 'No session');
 
         if (currentSession && currentSession.isActive) {
-          console.log('✅ Session active, checking if blocked...');
+          // Check if we're already on the blocked page
+          if (window.title.includes('blocked.freedom.to') || window.title.includes('Freedom')) {
+            console.log('✅ Already on blocked page, skipping');
+            return;
+          }
 
-          if (url && isUrlBlocked(url)) {
-            console.log('🚫 URL IS BLOCKED! Showing overlay...');
-            showOverlay(url);
-          } else {
-            console.log('✅ URL allowed');
-            hideOverlay();
+          if (url) {
+            const blocked = isUrlBlocked(url);
+            console.log('🔍 Is blocked:', blocked);
+
+            if (blocked) {
+              // Prevent rapid redirects (wait at least 3 seconds between redirects)
+              const now = Date.now();
+              if (now - lastRedirectTime < 3000 && lastBlockedUrl === url) {
+                console.log('⏳ Cooldown active, skipping redirect');
+                return;
+              }
+
+              console.log('🚫 Blocked site detected:', url, '- Redirecting...');
+              lastRedirectTime = now;
+              lastBlockedUrl = url;
+              redirectToBlockedPage();
+            }
           }
         } else {
           console.log('⏸️ No active session');
-          hideOverlay();
         }
-      } else {
-        hideOverlay();
       }
     } catch (error) {
       console.error('Browser monitoring error:', error);
     }
-  }, 2000); // Changed to 2 seconds for easier debugging
+  }, 2000); // Check every 2 seconds
 }
 
 function stopBrowserMonitoring() {
@@ -224,51 +212,35 @@ function stopBrowserMonitoring() {
     clearInterval(browserMonitorInterval);
     browserMonitorInterval = null;
   }
-  hideOverlay();
 }
 
 function checkIfBrowser(appName) {
-  const browsers = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'vivaldi'];
+  const browsers = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'vivaldi', 'msedge'];
   const lowerName = appName.toLowerCase();
   return browsers.some(b => lowerName.includes(b));
 }
 
 function extractUrlFromTitle(title) {
-  // Extract domain from browser window title
-  // Common patterns:
-  // "Facebook - Google Chrome"
-  // "Instagram | Profile - Mozilla Firefox"
-  // "twitter.com - Brave"
-  // "https://www.facebook.com/..." - Edge sometimes shows full URL
-
   if (!title) return null;
 
-  // First, try to extract a full domain with TLD (e.g., "facebook.com")
+  // Skip if already on blocked page
+  if (title.toLowerCase().includes('freedom') || title.toLowerCase().includes('blocked')) {
+    return null;
+  }
+
+  // Try to extract a full domain with TLD (e.g., "facebook.com")
   const fullDomainMatch = title.match(/([a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?)/i);
   if (fullDomainMatch) {
     return fullDomainMatch[1].toLowerCase();
   }
 
-  // If no full domain found, extract the site name before dash/pipe
-  // "Facebook - Chrome" -> "facebook"
-  // "Instagram | Profile - Firefox" -> "instagram"
+  // Extract the site name before dash/pipe
   const siteNameMatch = title.match(/^([a-zA-Z0-9]+)(?:\s*[-|])/);
   if (siteNameMatch) {
     const siteName = siteNameMatch[1].trim().toLowerCase();
-    // Filter out browser names
-    const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera'];
+    const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'new', 'tab'];
     if (!browserNames.includes(siteName) && siteName.length > 2) {
       return siteName;
-    }
-  }
-
-  // Last resort: try to extract first word if it looks like a site name
-  const firstWordMatch = title.match(/^([a-zA-Z0-9]+)/);
-  if (firstWordMatch) {
-    const firstWord = firstWordMatch[1].toLowerCase();
-    const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera'];
-    if (!browserNames.includes(firstWord) && firstWord.length > 2) {
-      return firstWord;
     }
   }
 
@@ -290,20 +262,15 @@ function isUrlBlocked(url) {
     }
   }
 
-  // Check blocklist - match both ways:
-  // - "facebook.com" in blocklist matches "facebook" from title
-  // - "facebook" in blocklist matches "facebook.com" from title
+  // Check blocklist
   for (const blocked of currentSession.blockedWebsites) {
     const blockedLower = blocked.toLowerCase();
 
-    // Direct match or substring match
     if (domain.includes(blockedLower) || blockedLower.includes(domain)) {
       return true;
     }
 
-    // Also check if domain is site name and blocked is full domain
-    // e.g., domain="facebook" and blocked="facebook.com"
-    const blockedBase = blockedLower.split('.')[0]; // "facebook.com" -> "facebook"
+    const blockedBase = blockedLower.split('.')[0];
     if (domain === blockedBase || blockedBase.includes(domain)) {
       return true;
     }
@@ -313,18 +280,51 @@ function isUrlBlocked(url) {
 }
 
 // ==================================
-// OVERLAY MANAGEMENT
+// REDIRECT USING POWERSHELL
 // ==================================
 
-function showOverlay(url) {
-  overlayWindow.webContents.send('update-blocked-url', url);
-  overlayWindow.show();
-  overlayWindow.focus();
-  overlayWindow.setFullScreen(true);
-}
+function redirectToBlockedPage() {
+  console.log('🔄 Attempting redirect to blocked page...');
 
-function hideOverlay() {
-  overlayWindow.hide();
+  // Use PowerShell to:
+  // 1. Focus address bar with Ctrl+L
+  // 2. Clear it and type the URL using clipboard (more reliable)
+  // 3. Press Enter
+
+  const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait('^l')
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait('^a')
+Start-Sleep -Milliseconds 100
+Set-Clipboard -Value '${BLOCKED_REDIRECT_URL}'
+[System.Windows.Forms.SendKeys]::SendWait('^v')
+Start-Sleep -Milliseconds 100
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+`;
+
+  // Write script to temp file and execute (avoids escaping issues)
+  const fs = require('fs');
+  const tempScript = path.join(app.getPath('temp'), 'redirect.ps1');
+
+  fs.writeFileSync(tempScript, psScript);
+
+  exec(`powershell -ExecutionPolicy Bypass -File "${tempScript}"`, (error, stdout, stderr) => {
+    if (error) {
+      console.error('Redirect error:', error);
+      console.error('stderr:', stderr);
+    } else {
+      console.log('✅ Redirected to blocked page');
+    }
+
+    // Clean up temp file
+    try {
+      fs.unlinkSync(tempScript);
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  });
 }
 
 // ==================================
@@ -334,26 +334,34 @@ function hideOverlay() {
 function startSessionPolling() {
   if (sessionPollInterval) return;
 
-  sessionPollInterval = setInterval(async () => {
-    try {
-      const response = await apiRequest(`/sessions/active?deviceId=${deviceId}`);
+  console.log('📊 Session polling started');
 
-      if (response.success && response.session) {
-        currentSession = response.session;
-      } else {
-        currentSession = null;
-      }
+  // Poll immediately on start
+  pollSession();
 
-      updateTrayMenu();
+  sessionPollInterval = setInterval(pollSession, 3000);
+}
 
-      // Send session update to main window
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('session-updated', currentSession);
-      }
-    } catch (error) {
-      console.error('Session polling error:', error);
+async function pollSession() {
+  try {
+    const response = await apiRequest(`/sessions/active?deviceId=${deviceId}`);
+    console.log('📊 Session poll response:', JSON.stringify(response).substring(0, 200));
+
+    if (response.success && response.session) {
+      currentSession = response.session;
+      console.log('✅ Session active, blocked sites:', currentSession.blockedWebsites);
+    } else {
+      currentSession = null;
     }
-  }, 3000);
+
+    updateTrayMenu();
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('session-updated', currentSession);
+    }
+  } catch (error) {
+    console.error('Session polling error:', error);
+  }
 }
 
 async function startSession(targetDevices, blockedWebsites, blockedPackages, blockedKeywords) {
@@ -389,7 +397,6 @@ async function stopSession() {
     });
 
     currentSession = null;
-    hideOverlay();
     updateTrayMenu();
 
     return { success: true };
@@ -538,7 +545,6 @@ function setupIPC() {
       sessionPollInterval = null;
     }
     currentSession = null;
-    hideOverlay();
     return { success: true };
   });
 
@@ -587,9 +593,25 @@ function setupIPC() {
     }
   });
 
-  // Check auth status
-  ipcMain.handle('is-authenticated', () => {
-    return !!authToken;
+  // Check auth status - verify token is valid with server
+  ipcMain.handle('is-authenticated', async () => {
+    if (!authToken) {
+      return false;
+    }
+
+    try {
+      const response = await apiRequest('/auth/me');
+      if (response.success) {
+        return true;
+      } else {
+        authToken = null;
+        store.delete('authToken');
+        return false;
+      }
+    } catch (error) {
+      console.error('Auth check failed:', error);
+      return false;
+    }
   });
 
   // Get this device's ID
@@ -604,12 +626,5 @@ function setupIPC() {
     } catch (error) {
       return { success: false, error: error.message };
     }
-  });
-
-  // End session from overlay (emergency exit)
-  ipcMain.handle('emergency-stop', async () => {
-    await stopSession();
-    hideOverlay();
-    return { success: true };
   });
 }

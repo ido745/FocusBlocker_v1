@@ -19,7 +19,6 @@ let currentSession = null;
 let authToken = null;
 let deviceId = null;
 let lastRedirectTime = 0; // Prevent rapid redirects
-let lastBlockedUrl = null; // Track what we last blocked
 
 // ==================================
 // APP LIFECYCLE
@@ -29,10 +28,14 @@ app.whenReady().then(() => {
   initializeApp();
 });
 
+// Set isQuitting flag when app is about to quit
+app.on('before-quit', () => {
+  app.isQuitting = true;
+});
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // Don't quit - keep running in system tray
+  // The app will only quit when user clicks "Quit" from tray menu
 });
 
 app.on('activate', () => {
@@ -81,6 +84,14 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  // Minimize to tray on close instead of quitting
+  mainWindow.on('close', (event) => {
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
 
   // Development mode
   if (process.argv.includes('--dev')) {
@@ -173,8 +184,9 @@ function startBrowserMonitoring() {
         console.log('📊 Session status:', currentSession ? `Active: ${currentSession.isActive}, Blocked sites: ${JSON.stringify(currentSession.blockedWebsites)}` : 'No session');
 
         if (currentSession && currentSession.isActive) {
-          // Check if we're already on the blocked page
-          if (window.title.includes('blocked.freedom.to') || window.title.includes('Freedom')) {
+          // Check if we're already on the blocked page (be specific to avoid false matches)
+          const titleLower = window.title.toLowerCase();
+          if (titleLower.includes('blocked.freedom.to') || titleLower === 'freedom' || titleLower.startsWith('freedom |') || titleLower.startsWith('freedom -')) {
             console.log('✅ Already on blocked page, skipping');
             return;
           }
@@ -184,16 +196,15 @@ function startBrowserMonitoring() {
             console.log('🔍 Is blocked:', blocked);
 
             if (blocked) {
-              // Prevent rapid redirects (wait at least 3 seconds between redirects)
+              // Prevent rapid redirects (wait at least 1.5 seconds between redirects)
               const now = Date.now();
-              if (now - lastRedirectTime < 3000 && lastBlockedUrl === url) {
+              if (now - lastRedirectTime < 1500) {
                 console.log('⏳ Cooldown active, skipping redirect');
                 return;
               }
 
               console.log('🚫 Blocked site detected:', url, '- Redirecting...');
               lastRedirectTime = now;
-              lastBlockedUrl = url;
               redirectToBlockedPage();
             }
           }
@@ -223,8 +234,9 @@ function checkIfBrowser(appName) {
 function extractUrlFromTitle(title) {
   if (!title) return null;
 
-  // Skip if already on blocked page
-  if (title.toLowerCase().includes('freedom') || title.toLowerCase().includes('blocked')) {
+  // Skip if already on blocked page (be specific to avoid false positives)
+  const lowerTitle = title.toLowerCase();
+  if (lowerTitle.includes('blocked.freedom.to') || lowerTitle === 'freedom' || lowerTitle.startsWith('freedom |') || lowerTitle.startsWith('freedom -')) {
     return null;
   }
 
@@ -234,8 +246,20 @@ function extractUrlFromTitle(title) {
     return fullDomainMatch[1].toLowerCase();
   }
 
-  // Extract the site name before dash/pipe
-  const siteNameMatch = title.match(/^([a-zA-Z0-9]+)(?:\s*[-|])/);
+  // Check for site name at the END of the title (e.g., "Settings - Reddit", "Home | Facebook")
+  // This handles pages like reddit.com/settings where title is "Settings - Reddit"
+  const endSiteMatch = title.match(/[-|–—:]\s*([a-zA-Z0-9]+)\s*$/);
+  if (endSiteMatch) {
+    const siteName = endSiteMatch[1].trim().toLowerCase();
+    const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'new', 'tab'];
+    if (!browserNames.includes(siteName) && siteName.length > 2) {
+      console.log('📍 Extracted site from end of title:', siteName);
+      return siteName;
+    }
+  }
+
+  // Extract the site name before dash/pipe/colon (e.g., "Reddit - Search", "reddit: settings")
+  const siteNameMatch = title.match(/^([a-zA-Z0-9]+)(?:\s*[-|:])/);
   if (siteNameMatch) {
     const siteName = siteNameMatch[1].trim().toLowerCase();
     const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'new', 'tab'];
@@ -244,19 +268,24 @@ function extractUrlFromTitle(title) {
     }
   }
 
-  return null;
+  // Return the full lowercase title for fallback matching against blocklist
+  // This allows isUrlBlocked to check if any blocked site name appears in the title
+  return '__title__:' + lowerTitle;
 }
 
 function isUrlBlocked(url) {
   if (!currentSession || !currentSession.blockedWebsites) return false;
 
-  const domain = url.toLowerCase();
+  // Check if this is a fallback title match (prefixed with __title__:)
+  const isTitleFallback = url.startsWith('__title__:');
+  const searchText = isTitleFallback ? url.substring(10) : url.toLowerCase();
 
   // Check whitelist first
   if (currentSession.whitelistedWebsites) {
     for (const whitelisted of currentSession.whitelistedWebsites) {
       const whitelistedLower = whitelisted.toLowerCase();
-      if (domain.includes(whitelistedLower) || whitelistedLower.includes(domain)) {
+      const whitelistedBase = whitelistedLower.split('.')[0];
+      if (searchText.includes(whitelistedLower) || searchText.includes(whitelistedBase)) {
         return false;
       }
     }
@@ -265,14 +294,22 @@ function isUrlBlocked(url) {
   // Check blocklist
   for (const blocked of currentSession.blockedWebsites) {
     const blockedLower = blocked.toLowerCase();
+    const blockedBase = blockedLower.split('.')[0]; // e.g., "reddit" from "reddit.com"
 
-    if (domain.includes(blockedLower) || blockedLower.includes(domain)) {
-      return true;
-    }
-
-    const blockedBase = blockedLower.split('.')[0];
-    if (domain === blockedBase || blockedBase.includes(domain)) {
-      return true;
+    // For title fallback, check if the blocked site name appears anywhere in the title
+    if (isTitleFallback) {
+      if (searchText.includes(blockedBase) && blockedBase.length > 3) {
+        console.log('📍 Title fallback match:', blockedBase, 'found in title');
+        return true;
+      }
+    } else {
+      // Normal domain matching
+      if (searchText.includes(blockedLower) || blockedLower.includes(searchText)) {
+        return true;
+      }
+      if (searchText === blockedBase || blockedBase.includes(searchText)) {
+        return true;
+      }
     }
   }
 
@@ -293,14 +330,12 @@ function redirectToBlockedPage() {
 
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds 50
 [System.Windows.Forms.SendKeys]::SendWait('^l')
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait('^a')
-Start-Sleep -Milliseconds 100
+Start-Sleep -Milliseconds 50
 Set-Clipboard -Value '${BLOCKED_REDIRECT_URL}'
 [System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 100
+Start-Sleep -Milliseconds 30
 [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 `;
 

@@ -27,23 +27,26 @@
     "appId": "com.focusapp.blocker",
     "productName": "Focus Blocker",
     "directories": {
-      "output": "dist"
+      "output": "build-v2"
     },
     "files": [
       "src/**/*",
       "assets/**/*"
     ],
+    "forceCodeSigning": false,
     "win": {
       "target": [
-        "nsis"
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
       ],
-      "icon": "assets/icons/icon.ico"
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": [
         "dmg"
       ],
-      "icon": "assets/icons/icon.icns",
       "category": "public.app-category.productivity"
     },
     "linux": {
@@ -51,7 +54,6 @@
         "AppImage",
         "deb"
       ],
-      "icon": "assets/icons/icon.png",
       "category": "Utility"
     }
   }

@@ -58,6 +58,10 @@ data class LoginRequest(
     val password: String
 )
 
+data class GoogleAuthRequest(
+    val idToken: String
+)
+
 data class AuthResponse(
     val success: Boolean,
     val token: String? = null,
@@ -68,7 +72,8 @@ data class AuthResponse(
 data class User(
     val id: String,
     val email: String,
-    val name: String
+    val name: String,
+    val picture: String? = null
 )
 
 data class DeviceRegistrationRequest(
@@ -173,6 +178,9 @@ interface ApiService {
 
     @POST("auth/login")
     suspend fun login(@Body request: LoginRequest): AuthResponse
+
+    @POST("auth/google")
+    suspend fun googleAuth(@Body request: GoogleAuthRequest): AuthResponse
 
     // Device Management
     @POST("devices/register")

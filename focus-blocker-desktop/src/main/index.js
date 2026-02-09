@@ -6,10 +6,18 @@ const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 const os = require('os');
 const { exec } = require('child_process');
+const http = require('http');
+const url = require('url');
 
 const store = new Store();
 const API_URL = 'http://127.0.0.1:3000'; // Use IPv4 instead of localhost
 const BLOCKED_REDIRECT_URL = 'https://blocked.freedom.to/';
+
+// Google OAuth Configuration
+// You need to create a Desktop App OAuth client in Google Cloud Console
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '42261799101-98ejerodh6qhv2rg9jd2s0b7ontmc9pj.apps.googleusercontent.com';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
+const GOOGLE_REDIRECT_PORT = 8089;
 
 let mainWindow;
 let tray;
@@ -323,20 +331,18 @@ function isUrlBlocked(url) {
 function redirectToBlockedPage() {
   console.log('🔄 Attempting redirect to blocked page...');
 
-  // Use PowerShell to:
-  // 1. Focus address bar with Ctrl+L
-  // 2. Clear it and type the URL using clipboard (more reliable)
-  // 3. Press Enter
+  // Close the current tab first (Ctrl+W), then open the blocked page
+  // This is more reliable than trying to replace the URL because:
+  // 1. Even if user interrupts, the blocked tab is already closed
+  // 2. A new clean tab opens with the blocked page
 
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
-Start-Sleep -Milliseconds 50
-[System.Windows.Forms.SendKeys]::SendWait('^l')
-Start-Sleep -Milliseconds 50
-Set-Clipboard -Value '${BLOCKED_REDIRECT_URL}'
-[System.Windows.Forms.SendKeys]::SendWait('^v')
-Start-Sleep -Milliseconds 30
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+# Close the current tab immediately
+[System.Windows.Forms.SendKeys]::SendWait('^w')
+# Small delay then open blocked page in default browser
+Start-Sleep -Milliseconds 100
+Start-Process '${BLOCKED_REDIRECT_URL}'
 `;
 
   // Write script to temp file and execute (avoids escaping issues)
@@ -552,11 +558,174 @@ async function login(email, password) {
 }
 
 // ==================================
+// GOOGLE SIGN-IN
+// ==================================
+
+async function googleSignIn() {
+  return new Promise((resolve, reject) => {
+    // Create a temporary local server to receive the OAuth callback
+    const server = http.createServer(async (req, res) => {
+      try {
+        const parsedUrl = url.parse(req.url, true);
+
+        if (parsedUrl.pathname === '/callback') {
+          const code = parsedUrl.query.code;
+          const error = parsedUrl.query.error;
+
+          if (error) {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<html><body><h1>Sign-in cancelled</h1><p>You can close this window.</p><script>window.close()</script></body></html>');
+            server.close();
+            resolve({ success: false, error: 'Sign-in cancelled' });
+            return;
+          }
+
+          if (code) {
+            // Exchange code for tokens
+            try {
+              const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({
+                  code,
+                  client_id: GOOGLE_CLIENT_ID,
+                  client_secret: GOOGLE_CLIENT_SECRET,
+                  redirect_uri: `http://localhost:${GOOGLE_REDIRECT_PORT}/callback`,
+                  grant_type: 'authorization_code'
+                })
+              });
+
+              const tokens = await tokenResponse.json();
+
+              if (tokens.id_token) {
+                // Send ID token to our backend
+                const backendResponse = await fetch(`${API_URL}/auth/google`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ idToken: tokens.id_token })
+                });
+
+                const backendData = await backendResponse.json();
+
+                if (backendData.success) {
+                  authToken = backendData.token;
+                  store.set('authToken', authToken);
+
+                  // Store user info
+                  if (backendData.user) {
+                    store.set('userEmail', backendData.user.email);
+                    store.set('userName', backendData.user.name);
+                    store.set('userPicture', backendData.user.picture);
+                  }
+
+                  await registerDevice();
+                  startBrowserMonitoring();
+                  startSessionPolling();
+
+                  res.writeHead(200, { 'Content-Type': 'text/html' });
+                  res.end('<html><body><h1>Sign-in successful!</h1><p>You can close this window and return to the app.</p><script>window.close()</script></body></html>');
+                  server.close();
+                  resolve({ success: true, user: backendData.user });
+                } else {
+                  res.writeHead(200, { 'Content-Type': 'text/html' });
+                  res.end(`<html><body><h1>Sign-in failed</h1><p>${backendData.error || 'Unknown error'}</p><script>window.close()</script></body></html>`);
+                  server.close();
+                  resolve({ success: false, error: backendData.error || 'Backend authentication failed' });
+                }
+              } else {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end('<html><body><h1>Sign-in failed</h1><p>No ID token received from Google.</p><script>window.close()</script></body></html>');
+                server.close();
+                resolve({ success: false, error: 'No ID token received' });
+              }
+            } catch (tokenError) {
+              console.error('Token exchange error:', tokenError);
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`<html><body><h1>Sign-in failed</h1><p>${tokenError.message}</p><script>window.close()</script></body></html>`);
+              server.close();
+              resolve({ success: false, error: tokenError.message });
+            }
+          }
+        } else {
+          res.writeHead(404);
+          res.end('Not found');
+        }
+      } catch (err) {
+        console.error('OAuth callback error:', err);
+        res.writeHead(500);
+        res.end('Internal error');
+        server.close();
+        resolve({ success: false, error: err.message });
+      }
+    });
+
+    server.listen(GOOGLE_REDIRECT_PORT, '127.0.0.1', () => {
+      console.log(`OAuth callback server listening on port ${GOOGLE_REDIRECT_PORT}`);
+
+      // Build the Google OAuth URL
+      const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
+      authUrl.searchParams.set('redirect_uri', `http://localhost:${GOOGLE_REDIRECT_PORT}/callback`);
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', 'openid email profile');
+      authUrl.searchParams.set('access_type', 'offline');
+      authUrl.searchParams.set('prompt', 'select_account');
+
+      // Open browser window for Google sign-in
+      const authWindow = new BrowserWindow({
+        width: 500,
+        height: 700,
+        show: true,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true
+        }
+      });
+
+      authWindow.loadURL(authUrl.toString());
+
+      // Handle window close before completion
+      authWindow.on('closed', () => {
+        // Give some time for the callback to complete
+        setTimeout(() => {
+          try {
+            server.close();
+          } catch (e) {
+            // Server might already be closed
+          }
+        }, 1000);
+      });
+    });
+
+    server.on('error', (err) => {
+      console.error('OAuth server error:', err);
+      resolve({ success: false, error: `Could not start OAuth server: ${err.message}` });
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      try {
+        server.close();
+      } catch (e) {}
+      resolve({ success: false, error: 'Sign-in timed out' });
+    }, 300000);
+  });
+}
+
+// ==================================
 // IPC HANDLERS
 // ==================================
 
 function setupIPC() {
-  // Authentication
+  // Authentication - Google Sign-In
+  ipcMain.handle('google-sign-in', async () => {
+    console.log('🔐 Google Sign-In initiated');
+    const result = await googleSignIn();
+    console.log('✅ Google Sign-In result:', result.success ? 'Success' : 'Failed');
+    return result;
+  });
+
+  // Legacy email/password auth (kept for compatibility)
   ipcMain.handle('register', async (event, { email, password, name }) => {
     console.log('📧 Registration attempt:', email);
     const result = await register(email, password, name);

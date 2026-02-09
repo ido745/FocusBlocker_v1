@@ -37,6 +37,12 @@ yarn-error.log*
 # =====================
 focus-blocker-desktop/dist/
 focus-blocker-desktop/out/
+focus-blocker-desktop/build-*/
+
+# =====================
+# Backend Data
+# =====================
+blocker-backend/data.json
 
 # =====================
 # Android (DistractionBlocker)

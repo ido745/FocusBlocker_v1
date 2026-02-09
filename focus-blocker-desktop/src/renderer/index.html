@@ -20,9 +20,45 @@
         }
         .login-screen {
             text-align: center;
+            padding: 60px 20px;
         }
         .login-screen h1 {
             color: #333;
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        .login-screen .subtitle {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 40px;
+        }
+        .google-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background: white;
+            color: #333;
+            border: 1px solid #ddd;
+            padding: 14px 32px;
+            border-radius: 28px;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+        }
+        .google-btn:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            background: #fafafa;
+        }
+        .google-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .google-btn .g-logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4285f4;
         }
         .btn {
             background: #4285f4;
@@ -119,8 +155,34 @@
             background: #e8e8e8;
             border-color: #ccc;
         }
-        .refresh-btn:active {
-            background: #ddd;
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-info img {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+        }
+        .error-msg {
+            background: #ffebee;
+            color: #c62828;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 16px 0;
+        }
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ddd;
+            border-top-color: #4285f4;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -128,51 +190,33 @@
     <div class="container">
         <!-- Login Screen -->
         <div id="loginScreen" class="login-screen">
-            <h1>🎯 Focus Blocker</h1>
-            <p>Sign in to sync your blocklists across devices</p>
+            <h1>🎯</h1>
+            <h1 style="font-size: 32px; margin-top: 0;">Focus Blocker</h1>
+            <p class="subtitle">Block distractions across all your devices</p>
 
-            <div id="loginForm" class="hidden" style="margin: 20px auto; max-width: 400px; text-align: left;">
-                <div style="margin: 0 0 20px 0; text-align: center;">
-                    <h3 id="formTitle">Sign In</h3>
-                    <p style="color: #666; font-size: 14px;">
-                        <span id="switchText">Don't have an account?</span>
-                        <a href="#" onclick="toggleAuthMode(); return false;" style="color: #4285f4; text-decoration: none;">
-                            <span id="switchLink">Register</span>
-                        </a>
-                    </p>
-                </div>
+            <div id="errorMsg" class="error-msg hidden"></div>
 
-                <div style="margin: 10px 0;">
-                    <label>Email:</label>
-                    <input type="email" id="emailInput" placeholder="your@email.com"
-                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
-                </div>
-                <div style="margin: 10px 0;">
-                    <label>Password:</label>
-                    <input type="password" id="passwordInput" placeholder="Enter password"
-                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
-                </div>
-                <div id="nameField" class="hidden" style="margin: 10px 0;">
-                    <label>Name:</label>
-                    <input type="text" id="nameInput" placeholder="Your Name"
-                           style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px;">
-                </div>
-                <div style="margin: 20px 0; text-align: center;">
-                    <button class="btn" id="submitBtn" onclick="submitAuth()">Sign In</button>
-                    <button class="btn" onclick="cancelLogin()" style="background: #999;">Cancel</button>
-                </div>
-            </div>
+            <button id="googleSignInBtn" class="google-btn" onclick="signInWithGoogle()">
+                <span class="g-logo">G</span>
+                <span>Continue with Google</span>
+            </button>
 
-            <button id="loginBtn" class="btn" onclick="showLoginForm()">Sign In / Register</button>
+            <p style="color: #999; font-size: 14px; margin-top: 40px;">
+                Your blocklists sync across all devices
+            </p>
         </div>
 
         <!-- Main App -->
         <div id="mainApp" class="hidden">
-            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h1 style="margin-bottom: 2px;">🎯 Focus Blocker</h1>
-                    <p id="userEmail" style="margin: 0 0 10px 0; color: #888; font-size: 13px;"></p>
+                    <div class="user-info">
+                        <img id="userPicture" src="" alt="" style="display: none;">
+                        <span id="userEmail" style="color: #888; font-size: 13px;"></span>
+                    </div>
                 </div>
+                <button class="btn btn-danger" onclick="logout()" style="margin: 0;">Logout</button>
             </div>
 
             <!-- Session Control -->
@@ -203,8 +247,6 @@
                 </div>
                 <div id="blockedWebsites"></div>
             </div>
-
-            <button class="btn btn-danger" onclick="logout()">Logout</button>
         </div>
     </div>
 
@@ -229,7 +271,7 @@
                     showMainApp();
                     currentDeviceId = await ipcRenderer.invoke('get-device-id');
                     const userLoaded = await loadUserInfo();
-                    if (!userLoaded) return; // Auth failed, already showing login
+                    if (!userLoaded) return;
                     await loadDevices();
                     await loadConfig();
                     await updateSession();
@@ -253,92 +295,57 @@
             document.getElementById('mainApp').classList.remove('hidden');
         }
 
-        // Authentication
-        let isRegisterMode = false;
-
-        function showLoginForm() {
-            document.getElementById('loginBtn').classList.add('hidden');
-            document.getElementById('loginForm').classList.remove('hidden');
-            document.getElementById('emailInput').focus();
-            isRegisterMode = false;
-            updateAuthMode();
+        function showError(message) {
+            const errorEl = document.getElementById('errorMsg');
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
         }
 
-        function cancelLogin() {
-            document.getElementById('loginBtn').classList.remove('hidden');
-            document.getElementById('loginForm').classList.add('hidden');
-            document.getElementById('emailInput').value = '';
-            document.getElementById('passwordInput').value = '';
-            document.getElementById('nameInput').value = '';
+        function hideError() {
+            document.getElementById('errorMsg').classList.add('hidden');
         }
 
-        function toggleAuthMode() {
-            isRegisterMode = !isRegisterMode;
-            updateAuthMode();
-        }
-
-        function updateAuthMode() {
-            const formTitle = document.getElementById('formTitle');
-            const submitBtn = document.getElementById('submitBtn');
-            const nameField = document.getElementById('nameField');
-            const switchText = document.getElementById('switchText');
-            const switchLink = document.getElementById('switchLink');
-
-            if (isRegisterMode) {
-                formTitle.textContent = 'Register';
-                submitBtn.textContent = 'Register';
-                nameField.classList.remove('hidden');
-                switchText.textContent = 'Already have an account?';
-                switchLink.textContent = 'Sign In';
-            } else {
-                formTitle.textContent = 'Sign In';
-                submitBtn.textContent = 'Sign In';
-                nameField.classList.add('hidden');
-                switchText.textContent = "Don't have an account?";
-                switchLink.textContent = 'Register';
-            }
-        }
-
-        async function submitAuth() {
-            const email = document.getElementById('emailInput').value.trim();
-            const password = document.getElementById('passwordInput').value.trim();
-            const name = document.getElementById('nameInput').value.trim();
-
-            if (!email || !password) {
-                alert('Please enter both email and password');
-                return;
-            }
-
-            if (isRegisterMode && !name) {
-                alert('Please enter your name');
-                return;
-            }
+        // Google Sign-In
+        async function signInWithGoogle() {
+            const btn = document.getElementById('googleSignInBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> <span>Signing in...</span>';
+            hideError();
 
             try {
-                const result = isRegisterMode
-                    ? await ipcRenderer.invoke('register', { email, password, name })
-                    : await ipcRenderer.invoke('login', { email, password });
+                const result = await ipcRenderer.invoke('google-sign-in');
 
                 if (result.success) {
                     showMainApp();
                     currentDeviceId = await ipcRenderer.invoke('get-device-id');
-                    document.getElementById('userEmail').textContent = email;
+                    if (result.user) {
+                        document.getElementById('userEmail').textContent = result.user.email;
+                        if (result.user.picture) {
+                            const img = document.getElementById('userPicture');
+                            img.src = result.user.picture;
+                            img.style.display = 'inline-block';
+                        }
+                    }
                     await loadDevices();
                     await loadConfig();
                     await updateSession();
                     setInterval(updateSession, 3000);
                 } else {
-                    alert((isRegisterMode ? 'Registration' : 'Login') + ' failed: ' + (result.error || 'Unknown error'));
+                    showError(result.error || 'Sign-in failed. Please try again.');
                 }
             } catch (error) {
-                alert((isRegisterMode ? 'Registration' : 'Login') + ' error: ' + error.message);
-                console.error('Auth error:', error);
+                console.error('Google sign-in error:', error);
+                showError('Sign-in failed: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="g-logo">G</span> <span>Continue with Google</span>';
             }
         }
 
         async function logout() {
             await ipcRenderer.invoke('logout');
             document.getElementById('userEmail').textContent = '';
+            document.getElementById('userPicture').style.display = 'none';
             showLoginScreen();
         }
 
@@ -348,7 +355,7 @@
             if (result.success) {
                 devices = result.devices;
                 renderDevices();
-                toggleAllDevices(); // Apply disabled state to checkboxes
+                toggleAllDevices();
             }
         }
 
@@ -380,14 +387,12 @@
         function toggleAllDevices() {
             const checkboxes = document.querySelectorAll('.device-checkbox');
             const allChecked = document.getElementById('allDevices').checked;
-
             checkboxes.forEach(cb => cb.disabled = allChecked);
         }
 
         function getSelectedDevices() {
             const allDevices = document.getElementById('allDevices').checked;
             if (allDevices) return 'all';
-
             const checkboxes = document.querySelectorAll('.device-checkbox:checked');
             return Array.from(checkboxes).map(cb => cb.value);
         }
@@ -406,7 +411,6 @@
         async function addWebsite() {
             const input = document.getElementById('websiteInput');
             const website = input.value.trim();
-
             if (!website) return;
 
             blockedWebsites.push(website);
@@ -432,9 +436,7 @@
         }
 
         async function saveConfig() {
-            await ipcRenderer.invoke('update-config', {
-                blockedWebsites
-            });
+            await ipcRenderer.invoke('update-config', { blockedWebsites });
         }
 
         // Session Management
@@ -476,7 +478,6 @@
             }
         }
 
-        // Listen for session updates from main process
         ipcRenderer.on('session-updated', (event, session) => {
             currentSession = session;
             updateSessionUI();
@@ -488,9 +489,13 @@
                 const result = await ipcRenderer.invoke('get-user-info');
                 if (result.success && result.user) {
                     document.getElementById('userEmail').textContent = result.user.email;
+                    if (result.user.picture) {
+                        const img = document.getElementById('userPicture');
+                        img.src = result.user.picture;
+                        img.style.display = 'inline-block';
+                    }
                     return true;
                 } else {
-                    // Auth failed - go back to login
                     console.log('Auth verification failed, returning to login');
                     showLoginScreen();
                     return false;

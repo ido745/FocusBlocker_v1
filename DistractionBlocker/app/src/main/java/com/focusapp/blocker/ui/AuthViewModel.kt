@@ -19,6 +19,7 @@ data class AuthState(
     val isLoading: Boolean = false,
     val userEmail: String? = null,
     val userName: String? = null,
+    val userPicture: String? = null,
     val errorMessage: String? = null
 )
 
@@ -135,6 +136,30 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 _authState.value = _authState.value.copy(
                     isLoading = false,
                     errorMessage = "Login failed: ${error.message}"
+                )
+            }
+        }
+    }
+
+    fun signInWithGoogle(idToken: String) {
+        viewModelScope.launch {
+            _authState.value = _authState.value.copy(isLoading = true, errorMessage = null)
+
+            repository?.googleAuth(idToken)?.onSuccess { user ->
+                _authState.value = _authState.value.copy(
+                    isAuthenticated = true,
+                    userEmail = user.email,
+                    userName = user.name,
+                    userPicture = user.picture,
+                    isLoading = false
+                )
+
+                // Fetch initial data
+                fetchData()
+            }?.onFailure { error ->
+                _authState.value = _authState.value.copy(
+                    isLoading = false,
+                    errorMessage = "Google sign-in failed: ${error.message}"
                 )
             }
         }

@@ -103,6 +103,28 @@ class AuthenticatedRepository(
         }
     }
 
+    suspend fun googleAuth(idToken: String): Result<User> {
+        return try {
+            val request = GoogleAuthRequest(idToken)
+            val response = apiService.googleAuth(request)
+
+            if (response.success && response.token != null && response.user != null) {
+                // Save auth token
+                authManager.saveAuthToken(response.token, response.user.email, response.user.name)
+
+                // Register device
+                registerDevice()
+
+                Result.success(response.user)
+            } else {
+                Result.failure(Exception(response.error ?: "Google auth failed"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error with Google auth", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun registerDevice(): Result<Device> {
         return try {
             val deviceId = authManager.getDeviceId()

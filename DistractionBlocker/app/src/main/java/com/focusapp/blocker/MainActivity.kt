@@ -3,6 +3,7 @@ package com.focusapp.blocker
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -36,23 +37,44 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.GetCredentialResponse
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
 import com.focusapp.blocker.ui.AuthViewModel
 import com.focusapp.blocker.ui.LoginScreen
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+        // Replace with your actual Google Cloud OAuth Client ID (Web client)
+        const val GOOGLE_CLIENT_ID = "42261799101-ibarq1tjou7rag3de5aifg0vg68771j8.apps.googleusercontent.com"
+    }
+
+    private lateinit var credentialManager: CredentialManager
+    private var authViewModel: AuthViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        credentialManager = CredentialManager.create(this)
+
         setContent {
             MaterialTheme {
-                val authViewModel: AuthViewModel = viewModel()
-                val authState by authViewModel.authState.collectAsState()
+                val viewModel: AuthViewModel = viewModel()
+                authViewModel = viewModel
+                val authState by viewModel.authState.collectAsState()
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -61,22 +83,62 @@ class MainActivity : ComponentActivity() {
                     if (authState.isAuthenticated) {
                         // User is logged in, show main app
                         MainScreen(
-                            viewModel = authViewModel,
+                            viewModel = viewModel,
                             onOpenAccessibilitySettings = { openAccessibilitySettings() },
                             isServiceEnabled = { isAccessibilityServiceEnabled() }
                         )
                     } else {
                         // User not logged in, show login screen
                         LoginScreen(
-                            onRegisterClick = { email, password, name ->
-                                authViewModel.register(email, password, name)
-                            },
-                            onLoginClick = { email, password ->
-                                authViewModel.login(email, password)
-                            },
+                            onGoogleSignInClick = { signInWithGoogle() },
                             isLoading = authState.isLoading,
                             errorMessage = authState.errorMessage
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun signInWithGoogle() {
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(GOOGLE_CLIENT_ID)
+            .setAutoSelectEnabled(true)
+            .build()
+
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+
+        lifecycleScope.launch {
+            try {
+                val result = credentialManager.getCredential(
+                    request = request,
+                    context = this@MainActivity
+                )
+                handleSignIn(result)
+            } catch (e: GetCredentialException) {
+                Log.e(TAG, "Google sign-in failed", e)
+                // The error will be shown via authState.errorMessage
+            }
+        }
+    }
+
+    private fun handleSignIn(result: GetCredentialResponse) {
+        val credential = result.credential
+
+        when (credential) {
+            is CustomCredential -> {
+                if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    try {
+                        val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                        val idToken = googleIdTokenCredential.idToken
+
+                        Log.d(TAG, "Got Google ID token, sending to server...")
+                        authViewModel?.signInWithGoogle(idToken)
+                    } catch (e: GoogleIdTokenParsingException) {
+                        Log.e(TAG, "Failed to parse Google ID token", e)
                     }
                 }
             }

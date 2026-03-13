@@ -11,7 +11,6 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 // Google OAuth Client IDs - one for each platform
-// Can be set via GOOGLE_CLIENT_IDS env var (comma-separated) or defaults to hardcoded values
 const DEFAULT_CLIENT_IDS = [
   '42261799101-ibarq1tjou7rag3de5aifg0vg68771j8.apps.googleusercontent.com', // Android (Web client)
   '42261799101-98ejerodh6qhv2rg9jd2s0b7ontmc9pj.apps.googleusercontent.com'  // Desktop
@@ -81,10 +80,71 @@ function authenticate(req, res, next) {
 }
 
 // ==================================
+// PENDING CHANGES HELPERS
+// ==================================
+
+/**
+ * Applies any pending changes that have matured (scheduledFor <= now).
+ * Returns true if any changes were applied.
+ */
+function applyMaturePendingChanges(user) {
+  if (!user.pendingChanges || user.pendingChanges.length === 0) return false;
+
+  const now = new Date();
+  let changed = false;
+
+  user.pendingChanges = user.pendingChanges.filter(change => {
+    if (new Date(change.scheduledFor) <= now) {
+      applyChange(user, change);
+      changed = true;
+      console.log(`Applied pending change: ${change.type} = ${change.value} for user ${user.email}`);
+      return false; // Remove from pending list
+    }
+    return true; // Keep in pending list
+  });
+
+  return changed;
+}
+
+/**
+ * Applies a single pending change to the user's config.
+ */
+function applyChange(user, change) {
+  if (!user.blocklists) user.blocklists = { websites: [], packages: [], keywords: [] };
+  if (!user.whitelists) user.whitelists = { websites: [], packages: [] };
+
+  switch (change.type) {
+    case 'remove_blocked_website':
+      user.blocklists.websites = (user.blocklists.websites || []).filter(w => w !== change.value);
+      break;
+    case 'remove_blocked_package':
+      user.blocklists.packages = (user.blocklists.packages || []).filter(p => p !== change.value);
+      break;
+    case 'remove_blocked_keyword':
+      user.blocklists.keywords = (user.blocklists.keywords || []).filter(k => k !== change.value);
+      break;
+    case 'add_whitelisted_website':
+      if (!(user.whitelists.websites || []).includes(change.value)) {
+        if (!user.whitelists.websites) user.whitelists.websites = [];
+        user.whitelists.websites.push(change.value);
+      }
+      break;
+    case 'add_whitelisted_package':
+      if (!(user.whitelists.packages || []).includes(change.value)) {
+        if (!user.whitelists.packages) user.whitelists.packages = [];
+        user.whitelists.packages.push(change.value);
+      }
+      break;
+    case 'disable_deletion_protection':
+      user.deletionProtectionEnabled = false;
+      break;
+  }
+}
+
+// ==================================
 // GOOGLE AUTHENTICATION
 // ==================================
 
-// Verify Google ID token and login/register user
 app.post('/auth/google', async (req, res) => {
   const { idToken } = req.body;
 
@@ -93,7 +153,6 @@ app.post('/auth/google', async (req, res) => {
   }
 
   try {
-    // Verify the Google ID token (accepts tokens from any of our client IDs)
     const ticket = await googleClient.verifyIdToken({
       idToken: idToken,
       audience: GOOGLE_CLIENT_IDS
@@ -105,11 +164,9 @@ app.post('/auth/google', async (req, res) => {
     const name = payload['name'];
     const picture = payload['picture'];
 
-    // Find or create user
     let user = Object.values(db.users).find(u => u.googleId === googleId);
 
     if (!user) {
-      // Create new user
       user = {
         id: uuidv4(),
         googleId,
@@ -126,21 +183,24 @@ app.post('/auth/google', async (req, res) => {
         whitelists: {
           websites: [],
           packages: ['com.focusapp.blocker', 'com.android.settings']
-        }
+        },
+        pendingChanges: [],
+        deletionProtectionEnabled: false
       };
       db.users[user.id] = user;
       saveData();
       console.log(`New user registered via Google: ${email}`);
     } else {
-      // Update user info
       user.email = email;
       user.name = name;
       user.picture = picture;
+      // Ensure new fields exist for existing users
+      if (!user.pendingChanges) user.pendingChanges = [];
+      if (user.deletionProtectionEnabled === undefined) user.deletionProtectionEnabled = false;
       saveData();
       console.log(`User logged in via Google: ${email}`);
     }
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: user.id, email: user.email, googleId: user.googleId },
       JWT_SECRET,
@@ -163,7 +223,6 @@ app.post('/auth/google', async (req, res) => {
   }
 });
 
-// Get current user info
 app.get('/auth/me', authenticate, (req, res) => {
   const user = db.users[req.user.id];
 
@@ -244,110 +303,65 @@ app.post('/devices/heartbeat', authenticate, (req, res) => {
 });
 
 // ==================================
-// SESSION MANAGEMENT
+// SESSION MANAGEMENT (kept for compatibility, but sessions are always-on)
 // ==================================
 
 app.post('/sessions/start', authenticate, (req, res) => {
+  // Sessions are now always-on; this endpoint is kept for compatibility
   const userId = req.user.id;
-  const { targetDevices, blockedWebsites, blockedPackages, blockedKeywords, duration } = req.body;
-
-  // End any existing active sessions
-  Object.values(db.sessions).forEach(session => {
-    if (session.userId === userId && session.isActive) {
-      session.isActive = false;
-      session.endTime = new Date().toISOString();
+  const user = db.users[userId];
+  res.json({
+    success: true,
+    message: 'Blocking is always active',
+    session: {
+      id: 'always-on',
+      isActive: true,
+      blockedWebsites: user?.blocklists?.websites || [],
+      blockedPackages: user?.blocklists?.packages || [],
+      blockedKeywords: user?.blocklists?.keywords || [],
+      whitelistedWebsites: user?.whitelists?.websites || [],
+      whitelistedPackages: user?.whitelists?.packages || []
     }
   });
+});
 
-  const sessionId = uuidv4();
+/**
+ * GET /sessions/active
+ * Now always returns the user's current config as an active session.
+ * Also applies any matured pending changes before returning.
+ */
+app.get('/sessions/active', authenticate, (req, res) => {
+  const userId = req.user.id;
   const user = db.users[userId];
 
-  const session = {
-    id: sessionId,
-    userId,
-    isActive: true,
-    startTime: new Date().toISOString(),
-    endTime: duration ? new Date(Date.now() + duration * 1000).toISOString() : null,
-    targetDevices: targetDevices || 'all',
-    blockedWebsites: blockedWebsites || user?.blocklists?.websites || [],
-    blockedPackages: blockedPackages || user?.blocklists?.packages || [],
-    blockedKeywords: blockedKeywords || user?.blocklists?.keywords || [],
-    whitelistedWebsites: user?.whitelists?.websites || [],
-    whitelistedPackages: user?.whitelists?.packages || []
-  };
+  if (!user) {
+    return res.json({ success: true, session: null });
+  }
 
-  db.sessions[sessionId] = session;
-  saveData();
+  // Apply any pending changes that have matured
+  if (applyMaturePendingChanges(user)) {
+    saveData();
+  }
 
-  console.log(`Session started by ${req.user.email}`);
-
-  res.json({ success: true, message: 'Session started', session });
-});
-
-app.get('/sessions/active', authenticate, (req, res) => {
-  const { deviceId } = req.query;
-  const userId = req.user.id;
-
-  const activeSession = Object.values(db.sessions).find(session => {
-    if (!session.isActive || session.userId !== userId) return false;
-
-    if (session.endTime && new Date(session.endTime) < new Date()) {
-      session.isActive = false;
-      saveData();
-      return false;
+  // Always return an active session - blocking is always on
+  res.json({
+    success: true,
+    session: {
+      id: 'always-on',
+      isActive: true,
+      blockedWebsites: user.blocklists?.websites || [],
+      blockedPackages: user.blocklists?.packages || [],
+      blockedKeywords: user.blocklists?.keywords || [],
+      whitelistedWebsites: user.whitelists?.websites || [],
+      whitelistedPackages: user.whitelists?.packages || [],
+      deletionProtectionEnabled: user.deletionProtectionEnabled || false
     }
-
-    if (session.targetDevices === 'all') return true;
-    if (Array.isArray(session.targetDevices) && deviceId) {
-      return session.targetDevices.includes(deviceId);
-    }
-
-    return false;
   });
-
-  if (activeSession) {
-    res.json({
-      success: true,
-      session: {
-        id: activeSession.id,
-        isActive: true,
-        blockedWebsites: activeSession.blockedWebsites,
-        blockedPackages: activeSession.blockedPackages,
-        blockedKeywords: activeSession.blockedKeywords,
-        whitelistedWebsites: activeSession.whitelistedWebsites,
-        whitelistedPackages: activeSession.whitelistedPackages,
-        startTime: activeSession.startTime,
-        endTime: activeSession.endTime
-      }
-    });
-  } else {
-    res.json({ success: true, session: null });
-  }
 });
 
-app.post('/sessions/stop', authenticate, (req, res) => {
-  const sessionId = req.body?.sessionId;
-  const userId = req.user.id;
-
-  if (sessionId) {
-    const session = db.sessions[sessionId];
-    if (session && session.userId === userId) {
-      session.isActive = false;
-      session.endTime = new Date().toISOString();
-    }
-  } else {
-    Object.values(db.sessions).forEach(session => {
-      if (session.userId === userId && session.isActive) {
-        session.isActive = false;
-        session.endTime = new Date().toISOString();
-      }
-    });
-  }
-
-  saveData();
-  console.log(`Session stopped by ${req.user.email}`);
-
-  res.json({ success: true, message: 'Session stopped' });
+app.post('/sessions/stop', authenticate, (_req, res) => {
+  // Sessions are always-on; stopping is not allowed
+  res.json({ success: true, message: 'Blocking is always active and cannot be stopped' });
 });
 
 // ==================================
@@ -362,16 +376,22 @@ app.get('/config', authenticate, (req, res) => {
     return res.status(404).json({ success: false, error: 'User not found' });
   }
 
+  // Apply matured pending changes
+  if (applyMaturePendingChanges(user)) {
+    saveData();
+  }
+
   res.json({
     success: true,
     blocklists: user.blocklists || { websites: [], packages: [], keywords: [] },
-    whitelists: user.whitelists || { websites: [], packages: [] }
+    whitelists: user.whitelists || { websites: [], packages: [] },
+    deletionProtectionEnabled: user.deletionProtectionEnabled || false
   });
 });
 
 app.post('/config', authenticate, (req, res) => {
   const userId = req.user.id;
-  const { blockedWebsites, blockedPackages, blockedKeywords, whitelistedWebsites, whitelistedPackages } = req.body;
+  const { blockedWebsites, blockedPackages, blockedKeywords, whitelistedWebsites, whitelistedPackages, deletionProtectionEnabled } = req.body;
 
   const user = db.users[userId];
 
@@ -391,17 +411,10 @@ app.post('/config', authenticate, (req, res) => {
     ensuredWhitelist.add('com.focusapp.blocker');
     user.whitelists.packages = Array.from(ensuredWhitelist);
   }
-
-  // Sync to active sessions
-  Object.values(db.sessions).forEach(session => {
-    if (session.userId === userId && session.isActive) {
-      session.blockedWebsites = user.blocklists.websites || [];
-      session.blockedPackages = user.blocklists.packages || [];
-      session.blockedKeywords = user.blocklists.keywords || [];
-      session.whitelistedWebsites = user.whitelists.websites || [];
-      session.whitelistedPackages = user.whitelists.packages || [];
-    }
-  });
+  // Enable deletion protection immediately (tightening constraint)
+  if (deletionProtectionEnabled === true) {
+    user.deletionProtectionEnabled = true;
+  }
 
   saveData();
   console.log(`Config updated for ${user.email}`);
@@ -409,15 +422,126 @@ app.post('/config', authenticate, (req, res) => {
   res.json({
     success: true,
     blocklists: user.blocklists,
-    whitelists: user.whitelists
+    whitelists: user.whitelists,
+    deletionProtectionEnabled: user.deletionProtectionEnabled || false
   });
+});
+
+// ==================================
+// PENDING CHANGES MANAGEMENT
+// ==================================
+
+/**
+ * GET /config/pending
+ * Returns all pending (queued) changes for the user.
+ */
+app.get('/config/pending', authenticate, (req, res) => {
+  const userId = req.user.id;
+  const user = db.users[userId];
+
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found' });
+  }
+
+  // Apply any matured changes first
+  if (applyMaturePendingChanges(user)) {
+    saveData();
+  }
+
+  res.json({
+    success: true,
+    pendingChanges: user.pendingChanges || []
+  });
+});
+
+/**
+ * POST /config/pending
+ * Queues a change that relaxes constraints. Takes effect after 24 hours.
+ * Body: { type, value }
+ * Types: remove_blocked_website, remove_blocked_package, remove_blocked_keyword,
+ *        add_whitelisted_website, add_whitelisted_package, disable_deletion_protection
+ */
+app.post('/config/pending', authenticate, (req, res) => {
+  const userId = req.user.id;
+  const { type, value } = req.body;
+
+  const user = db.users[userId];
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found' });
+  }
+
+  const validTypes = [
+    'remove_blocked_website',
+    'remove_blocked_package',
+    'remove_blocked_keyword',
+    'add_whitelisted_website',
+    'add_whitelisted_package',
+    'disable_deletion_protection'
+  ];
+
+  if (!type || !validTypes.includes(type)) {
+    return res.status(400).json({ success: false, error: 'Invalid change type' });
+  }
+
+  if (!user.pendingChanges) user.pendingChanges = [];
+
+  // Check if an identical pending change already exists
+  const existing = user.pendingChanges.find(c => c.type === type && c.value === value);
+  if (existing) {
+    return res.json({ success: true, change: existing, message: 'Change already pending' });
+  }
+
+  const change = {
+    id: uuidv4(),
+    type,
+    value: value || null,
+    createdAt: new Date().toISOString(),
+    scheduledFor: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  };
+
+  user.pendingChanges.push(change);
+  saveData();
+
+  console.log(`Pending change queued: ${type} = ${value} for ${user.email}, takes effect at ${change.scheduledFor}`);
+
+  res.json({ success: true, change });
+});
+
+/**
+ * DELETE /config/pending/:id
+ * Cancels a pending change (user changed their mind).
+ */
+app.delete('/config/pending/:id', authenticate, (req, res) => {
+  const userId = req.user.id;
+  const changeId = req.params.id;
+
+  const user = db.users[userId];
+  if (!user) {
+    return res.status(404).json({ success: false, error: 'User not found' });
+  }
+
+  if (!user.pendingChanges) {
+    return res.status(404).json({ success: false, error: 'No pending changes' });
+  }
+
+  const index = user.pendingChanges.findIndex(c => c.id === changeId);
+  if (index === -1) {
+    return res.status(404).json({ success: false, error: 'Change not found' });
+  }
+
+  user.pendingChanges.splice(index, 1);
+  saveData();
+
+  console.log(`Pending change cancelled: ${changeId} for ${user.email}`);
+
+  res.json({ success: true, message: 'Pending change cancelled' });
 });
 
 // ==================================
 // HEALTH CHECK
 // ==================================
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({
     success: true,
     message: 'Server is running',
@@ -436,8 +560,8 @@ app.get('/health', (req, res) => {
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('=================================');
-  console.log('Focus Blocker Backend V3');
-  console.log('With Google Sign-In & Persistence');
+  console.log('Focus Blocker Backend V4');
+  console.log('Always-On + Pending Changes');
   console.log('=================================');
   console.log(`Server running on port ${PORT}`);
   console.log(`Health: http://localhost:${PORT}/health`);
@@ -450,14 +574,17 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('  POST /devices/register');
   console.log('  GET  /devices');
   console.log('');
-  console.log('Sessions:');
-  console.log('  POST /sessions/start');
-  console.log('  GET  /sessions/active');
-  console.log('  POST /sessions/stop');
+  console.log('Sessions (always-on):');
+  console.log('  GET  /sessions/active - Always returns user config as active');
   console.log('');
   console.log('Config:');
   console.log('  GET  /config');
   console.log('  POST /config');
+  console.log('');
+  console.log('Pending Changes:');
+  console.log('  GET    /config/pending');
+  console.log('  POST   /config/pending');
+  console.log('  DELETE /config/pending/:id');
   console.log('=================================');
 });
 

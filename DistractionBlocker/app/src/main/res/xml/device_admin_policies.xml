@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- No additional policies needed; being a device admin is enough
+             to require deactivation before the app can be uninstalled. -->
+    </uses-policies>
+</device-admin>

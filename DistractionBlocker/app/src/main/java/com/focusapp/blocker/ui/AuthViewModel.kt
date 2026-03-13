@@ -1,13 +1,20 @@
 package com.focusapp.blocker.ui
 
 import android.app.Application
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.focusapp.blocker.data.AuthManager
 import com.focusapp.blocker.data.AuthenticatedRepository
+import com.focusapp.blocker.data.Blocklists
 import com.focusapp.blocker.data.Device
+import com.focusapp.blocker.data.PendingChange
 import com.focusapp.blocker.data.PreferencesManager
 import com.focusapp.blocker.data.Session
+import com.focusapp.blocker.data.Whitelists
+import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,18 +31,17 @@ data class AuthState(
 )
 
 data class AppUiState(
-    val serverUrl: String = "http://10.0.2.2:3000",
+    val serverUrl: String = "https://focus-blocker-backend.onrender.com",
     val session: Session? = null,
-    val isSessionActive: Boolean = false,
     val devices: List<Device> = emptyList(),
     val currentDeviceId: String? = null,
-    val allDevicesSelected: Boolean = true,
-    val selectedDeviceIds: Set<String> = emptySet(),
     val blockedPackages: Set<String> = setOf(),
     val blockedKeywords: Set<String> = setOf(),
     val blockedWebsites: Set<String> = setOf(),
     val whitelistedPackages: Set<String> = setOf(),
     val whitelistedWebsites: Set<String> = setOf(),
+    val pendingChanges: List<PendingChange> = emptyList(),
+    val deletionProtectionEnabled: Boolean = false,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null
@@ -63,8 +69,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             preferencesManager.serverUrl.collect { url ->
                 _uiState.value = _uiState.value.copy(serverUrl = url)
                 repository = AuthenticatedRepository(getApplication(), url)
-
-                // If authenticated, fetch data
                 if (_authState.value.isAuthenticated) {
                     fetchData()
                 }
@@ -84,7 +88,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 userEmail = email,
                 userName = name
             )
-
             _uiState.value = _uiState.value.copy(currentDeviceId = deviceId)
 
             if (!token.isNullOrBlank()) {
@@ -98,7 +101,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun register(email: String, password: String, name: String) {
         viewModelScope.launch {
             _authState.value = _authState.value.copy(isLoading = true, errorMessage = null)
-
             repository?.register(email, password, name)?.onSuccess { user ->
                 _authState.value = _authState.value.copy(
                     isAuthenticated = true,
@@ -106,8 +108,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     userName = user.name,
                     isLoading = false
                 )
-
-                // Fetch initial data
                 fetchData()
             }?.onFailure { error ->
                 _authState.value = _authState.value.copy(
@@ -121,7 +121,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun login(email: String, password: String) {
         viewModelScope.launch {
             _authState.value = _authState.value.copy(isLoading = true, errorMessage = null)
-
             repository?.login(email, password)?.onSuccess { user ->
                 _authState.value = _authState.value.copy(
                     isAuthenticated = true,
@@ -129,8 +128,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     userName = user.name,
                     isLoading = false
                 )
-
-                // Fetch initial data
                 fetchData()
             }?.onFailure { error ->
                 _authState.value = _authState.value.copy(
@@ -144,7 +141,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun signInWithGoogle(idToken: String) {
         viewModelScope.launch {
             _authState.value = _authState.value.copy(isLoading = true, errorMessage = null)
-
             repository?.googleAuth(idToken)?.onSuccess { user ->
                 _authState.value = _authState.value.copy(
                     isAuthenticated = true,
@@ -153,8 +149,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     userPicture = user.picture,
                     isLoading = false
                 )
-
-                // Fetch initial data
                 fetchData()
             }?.onFailure { error ->
                 _authState.value = _authState.value.copy(
@@ -168,7 +162,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         viewModelScope.launch {
             repository?.logout()
-
             _authState.value = AuthState(isAuthenticated = false)
             _uiState.value = AppUiState(serverUrl = _uiState.value.serverUrl)
         }
@@ -179,20 +172,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private fun fetchData() {
         fetchConfig()
         fetchDevices()
-        fetchActiveSession()
+        fetchPendingChanges()
     }
 
     fun fetchConfig() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-
-            repository?.getConfig()?.onSuccess { (blocklists, whitelists) ->
+            repository?.getConfig()?.onSuccess { (blocklists, whitelists, deletionProtection) ->
                 _uiState.value = _uiState.value.copy(
                     blockedPackages = blocklists.packages.orEmpty().toSet(),
                     blockedKeywords = blocklists.keywords.orEmpty().toSet(),
                     blockedWebsites = blocklists.websites.orEmpty().toSet(),
                     whitelistedPackages = whitelists.packages.orEmpty().toSet(),
                     whitelistedWebsites = whitelists.websites.orEmpty().toSet(),
+                    deletionProtectionEnabled = deletionProtection,
                     isLoading = false
                 )
             }?.onFailure { error ->
@@ -216,98 +209,19 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun fetchActiveSession() {
+    fun fetchPendingChanges() {
         viewModelScope.launch {
-            repository?.getActiveSession()?.onSuccess { session ->
-                _uiState.value = _uiState.value.copy(
-                    session = session,
-                    isSessionActive = session?.isActive == true
-                )
+            repository?.getPendingChanges()?.onSuccess { changes ->
+                _uiState.value = _uiState.value.copy(pendingChanges = changes)
             }?.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
-                    errorMessage = "Failed to check session: ${error.message}"
+                    errorMessage = "Failed to load pending changes: ${error.message}"
                 )
             }
         }
     }
 
-    // ================== Session Management ==================
-
-    fun toggleSession() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-
-            if (_uiState.value.isSessionActive) {
-                // Stop session
-                repository?.stopSession()?.onSuccess {
-                    _uiState.value = _uiState.value.copy(
-                        isSessionActive = false,
-                        session = null,
-                        isLoading = false,
-                        successMessage = "Focus session stopped"
-                    )
-                }?.onFailure { error ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = "Failed to stop session: ${error.message}"
-                    )
-                }
-            } else {
-                // Determine target devices
-                val targetDevices: Any = if (_uiState.value.allDevicesSelected) {
-                    "all"
-                } else {
-                    _uiState.value.selectedDeviceIds.toList()
-                }
-
-                val targetLabel = if (targetDevices == "all") "all devices" else "${(_uiState.value.selectedDeviceIds.size)} device(s)"
-
-                // Start session with current blocklists
-                repository?.startSession(
-                    targetDevices = targetDevices,
-                    blockedWebsites = _uiState.value.blockedWebsites.toList(),
-                    blockedPackages = _uiState.value.blockedPackages.toList(),
-                    blockedKeywords = _uiState.value.blockedKeywords.toList()
-                )?.onSuccess { session ->
-                    _uiState.value = _uiState.value.copy(
-                        isSessionActive = true,
-                        session = session,
-                        isLoading = false,
-                        successMessage = "Focus session started on $targetLabel!"
-                    )
-                }?.onFailure { error ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = "Failed to start session: ${error.message}"
-                    )
-                }
-            }
-        }
-    }
-
-    // ================== Device Selection ==================
-
-    fun toggleAllDevices() {
-        _uiState.value = _uiState.value.copy(
-            allDevicesSelected = !_uiState.value.allDevicesSelected,
-            selectedDeviceIds = emptySet()
-        )
-    }
-
-    fun toggleDevice(deviceId: String) {
-        val current = _uiState.value.selectedDeviceIds
-        val updated = if (current.contains(deviceId)) {
-            current - deviceId
-        } else {
-            current + deviceId
-        }
-        _uiState.value = _uiState.value.copy(
-            selectedDeviceIds = updated,
-            allDevicesSelected = false
-        )
-    }
-
-    // ================== Configuration Management ==================
+    // ================== Server URL ==================
 
     fun updateServerUrl(url: String) {
         viewModelScope.launch {
@@ -317,6 +231,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ================== Configuration Management ==================
+    // Adding to blocklists (tightening) = immediate
+    // Removing from blocklists or adding to whitelist (relaxing) = 24-hour delay
+
     fun addBlockedPackage(packageName: String) {
         if (packageName.isBlank()) return
         val updated = _uiState.value.blockedPackages + packageName
@@ -324,10 +242,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         syncConfig()
     }
 
+    /** Removing a blocked app is a constraint relaxation — 24-hour delay. */
     fun removeBlockedPackage(packageName: String) {
-        val updated = _uiState.value.blockedPackages - packageName
-        _uiState.value = _uiState.value.copy(blockedPackages = updated)
-        syncConfig()
+        queuePendingChange("remove_blocked_package", packageName)
     }
 
     fun addBlockedKeyword(keyword: String) {
@@ -337,10 +254,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         syncConfig()
     }
 
+    /** Removing a blocked keyword is a constraint relaxation — 24-hour delay. */
     fun removeBlockedKeyword(keyword: String) {
-        val updated = _uiState.value.blockedKeywords - keyword
-        _uiState.value = _uiState.value.copy(blockedKeywords = updated)
-        syncConfig()
+        queuePendingChange("remove_blocked_keyword", keyword)
     }
 
     fun addBlockedWebsite(website: String) {
@@ -350,37 +266,110 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         syncConfig()
     }
 
+    /** Removing a blocked website is a constraint relaxation — 24-hour delay. */
     fun removeBlockedWebsite(website: String) {
-        val updated = _uiState.value.blockedWebsites - website
-        _uiState.value = _uiState.value.copy(blockedWebsites = updated)
-        syncConfig()
+        queuePendingChange("remove_blocked_website", website)
     }
 
-    fun addWhitelistedPackage(packageName: String) {
-        if (packageName.isBlank()) return
-        val updated = _uiState.value.whitelistedPackages + packageName
-        _uiState.value = _uiState.value.copy(whitelistedPackages = updated)
-        syncConfig()
-    }
-
+    /** Removing from whitelist (tightening) = immediate. */
     fun removeWhitelistedPackage(packageName: String) {
         val updated = _uiState.value.whitelistedPackages - packageName
         _uiState.value = _uiState.value.copy(whitelistedPackages = updated)
         syncConfig()
     }
 
-    fun addWhitelistedWebsite(website: String) {
-        if (website.isBlank()) return
-        val updated = _uiState.value.whitelistedWebsites + website.lowercase()
-        _uiState.value = _uiState.value.copy(whitelistedWebsites = updated)
-        syncConfig()
+    /** Adding to whitelist (relaxing — bypasses a block) = 24-hour delay. */
+    fun addWhitelistedPackage(packageName: String) {
+        if (packageName.isBlank()) return
+        queuePendingChange("add_whitelisted_package", packageName)
     }
 
+    /** Removing from whitelist (tightening) = immediate. */
     fun removeWhitelistedWebsite(website: String) {
         val updated = _uiState.value.whitelistedWebsites - website
         _uiState.value = _uiState.value.copy(whitelistedWebsites = updated)
         syncConfig()
     }
+
+    /** Adding to whitelist (relaxing) = 24-hour delay. */
+    fun addWhitelistedWebsite(website: String) {
+        if (website.isBlank()) return
+        queuePendingChange("add_whitelisted_website", website.lowercase())
+    }
+
+    // ================== Deletion Protection ==================
+
+    /** Enable deletion protection immediately (tightening constraint). */
+    fun enableDeletionProtection(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+        return if (dpm.isAdminActive(adminComponent)) {
+            // Already admin — just sync the flag to server
+            viewModelScope.launch {
+                repository?.updateConfig(deletionProtectionEnabled = true)
+                _uiState.value = _uiState.value.copy(deletionProtectionEnabled = true)
+            }
+            true
+        } else {
+            // Caller must launch the admin activation intent; returns false to indicate
+            // the intent is needed. The flag will be set after the intent resolves.
+            false
+        }
+    }
+
+    /** Called from MainActivity after device admin is successfully activated. */
+    fun onDeviceAdminEnabled() {
+        viewModelScope.launch {
+            repository?.updateConfig(deletionProtectionEnabled = true)
+            _uiState.value = _uiState.value.copy(deletionProtectionEnabled = true)
+            _uiState.value = _uiState.value.copy(successMessage = "Deletion protection enabled")
+        }
+    }
+
+    /**
+     * Disable deletion protection — queues a 24-hour pending change.
+     * The device admin will be deactivated after the delay elapses and the session
+     * poll detects the updated server state.
+     */
+    fun requestDisableDeletionProtection() {
+        queuePendingChange("disable_deletion_protection", null)
+    }
+
+    // ================== Pending Changes ==================
+
+    private fun queuePendingChange(type: String, value: String?) {
+        viewModelScope.launch {
+            repository?.addPendingChange(type, value)?.onSuccess { change ->
+                val updated = _uiState.value.pendingChanges + change
+                _uiState.value = _uiState.value.copy(
+                    pendingChanges = updated,
+                    successMessage = "Change scheduled — takes effect in 24 hours"
+                )
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "Failed to schedule change: ${error.message}"
+                )
+            }
+        }
+    }
+
+    fun cancelPendingChange(changeId: String) {
+        viewModelScope.launch {
+            repository?.cancelPendingChange(changeId)?.onSuccess {
+                val updated = _uiState.value.pendingChanges.filter { it.id != changeId }
+                _uiState.value = _uiState.value.copy(
+                    pendingChanges = updated,
+                    successMessage = "Scheduled change cancelled"
+                )
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "Failed to cancel change: ${error.message}"
+                )
+            }
+        }
+    }
+
+    // ================== Private Helpers ==================
 
     private fun syncConfig() {
         viewModelScope.launch {
@@ -391,13 +380,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 whitelistedWebsites = _uiState.value.whitelistedWebsites.toList(),
                 whitelistedPackages = _uiState.value.whitelistedPackages.toList()
             )?.onSuccess {
-                _uiState.value = _uiState.value.copy(
-                    successMessage = "Configuration synced"
-                )
+                _uiState.value = _uiState.value.copy(successMessage = "Configuration synced")
             }?.onFailure { error ->
-                _uiState.value = _uiState.value.copy(
-                    errorMessage = "Failed to sync: ${error.message}"
-                )
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to sync: ${error.message}")
             }
         }
     }

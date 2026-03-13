@@ -38,6 +38,7 @@ yarn-error.log*
 focus-blocker-desktop/dist/
 focus-blocker-desktop/out/
 focus-blocker-desktop/build-*/
+focus-blocker-desktop/src/main/credentials.js
 
 # =====================
 # Backend Data

@@ -1,11 +1,16 @@
 package com.focusapp.blocker
 
+import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -20,9 +25,8 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -44,6 +48,9 @@ import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.focusapp.blocker.data.PendingChange
+import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
+import com.focusapp.blocker.service.FocusBlockerForegroundService
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
 import com.focusapp.blocker.ui.AuthViewModel
@@ -53,22 +60,37 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        // Replace with your actual Google Cloud OAuth Client ID (Web client)
         const val GOOGLE_CLIENT_ID = "42261799101-ibarq1tjou7rag3de5aifg0vg68771j8.apps.googleusercontent.com"
     }
 
     private lateinit var credentialManager: CredentialManager
     private var authViewModel: AuthViewModel? = null
 
+    // Launcher to handle device admin activation result
+    private val adminLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            authViewModel?.onDeviceAdminEnabled()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         credentialManager = CredentialManager.create(this)
+
+        // Start foreground service to keep the process alive in the background
+        FocusBlockerForegroundService.startService(this)
 
         setContent {
             MaterialTheme {
@@ -81,14 +103,13 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     if (authState.isAuthenticated) {
-                        // User is logged in, show main app
                         MainScreen(
                             viewModel = viewModel,
                             onOpenAccessibilitySettings = { openAccessibilitySettings() },
-                            isServiceEnabled = { isAccessibilityServiceEnabled() }
+                            isServiceEnabled = { isAccessibilityServiceEnabled() },
+                            onRequestDeviceAdmin = { requestDeviceAdmin() }
                         )
                     } else {
-                        // User not logged in, show login screen
                         LoginScreen(
                             onGoogleSignInClick = { signInWithGoogle() },
                             isLoading = authState.isLoading,
@@ -120,23 +141,18 @@ class MainActivity : ComponentActivity() {
                 handleSignIn(result)
             } catch (e: GetCredentialException) {
                 Log.e(TAG, "Google sign-in failed", e)
-                // The error will be shown via authState.errorMessage
             }
         }
     }
 
     private fun handleSignIn(result: GetCredentialResponse) {
         val credential = result.credential
-
         when (credential) {
             is CustomCredential -> {
                 if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     try {
                         val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                        val idToken = googleIdTokenCredential.idToken
-
-                        Log.d(TAG, "Got Google ID token, sending to server...")
-                        authViewModel?.signInWithGoogle(idToken)
+                        authViewModel?.signInWithGoogle(googleIdTokenCredential.idToken)
                     } catch (e: GoogleIdTokenParsingException) {
                         Log.e(TAG, "Failed to parse Google ID token", e)
                     }
@@ -146,8 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openAccessibilitySettings() {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        startActivity(intent)
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -156,17 +171,34 @@ class MainActivity : ComponentActivity() {
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: ""
-
         return enabledServices.contains(expectedComponentName)
     }
+
+    /** Launches the system dialog to activate device admin (deletion protection). */
+    fun requestDeviceAdmin() {
+        val adminComponent = ComponentName(this, FocusDeviceAdminReceiver::class.java)
+        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Prevents this app from being deleted in moments of weakness."
+            )
+        }
+        adminLauncher.launch(intent)
+    }
 }
+
+// ==================================
+// MAIN SCREEN
+// ==================================
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(
     viewModel: AuthViewModel,
     onOpenAccessibilitySettings: () -> Unit,
-    isServiceEnabled: () -> Boolean
+    isServiceEnabled: () -> Boolean,
+    onRequestDeviceAdmin: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val authState by viewModel.authState.collectAsState()
@@ -175,12 +207,11 @@ fun MainScreen(
     val pagerState = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
 
-    // Sync tab and pager
     LaunchedEffect(pagerState.currentPage) {
         selectedTab = pagerState.currentPage
     }
 
-    // Check service status periodically (every 500ms for quick response)
+    // Check service status periodically
     LaunchedEffect(Unit) {
         while (true) {
             serviceEnabled = isServiceEnabled()
@@ -188,11 +219,12 @@ fun MainScreen(
         }
     }
 
-    // Poll for active sessions
+    // Poll server for config and pending changes updates
     LaunchedEffect(Unit) {
         while (true) {
-            viewModel.fetchActiveSession()
-            delay(3000)
+            viewModel.fetchConfig()
+            viewModel.fetchPendingChanges()
+            delay(30_000) // Every 30 seconds (accessibility service handles the 3-second blocking poll)
         }
     }
 
@@ -210,16 +242,15 @@ fun MainScreen(
                             }
                         )
                         authState.userEmail?.let { email ->
-                            Text(
-                                email,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray
-                            )
+                            Text(email, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                         }
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.fetchConfig() }) {
+                    IconButton(onClick = {
+                        viewModel.fetchConfig()
+                        viewModel.fetchPendingChanges()
+                    }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                     IconButton(onClick = onOpenAccessibilitySettings) {
@@ -237,119 +268,133 @@ fun MainScreen(
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
                     label = { Text("Home") },
                     selected = selectedTab == 0,
-                    onClick = {
-                        selectedTab = 0
-                        scope.launch { pagerState.animateScrollToPage(0) }
-                    }
+                    onClick = { selectedTab = 0; scope.launch { pagerState.animateScrollToPage(0) } }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Block, contentDescription = null) },
                     label = { Text("Block") },
                     selected = selectedTab == 1,
-                    onClick = {
-                        selectedTab = 1
-                        scope.launch { pagerState.animateScrollToPage(1) }
-                    }
+                    onClick = { selectedTab = 1; scope.launch { pagerState.animateScrollToPage(1) } }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Shield, contentDescription = null) },
                     label = { Text("Whitelist") },
                     selected = selectedTab == 2,
-                    onClick = {
-                        selectedTab = 2
-                        scope.launch { pagerState.animateScrollToPage(2) }
-                    }
+                    onClick = { selectedTab = 2; scope.launch { pagerState.animateScrollToPage(2) } }
                 )
             }
         }
     ) { padding ->
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+            modifier = Modifier.fillMaxSize().padding(padding)
         ) { page ->
             when (page) {
-                0 -> HomePage(viewModel, uiState, serviceEnabled, onOpenAccessibilitySettings)
+                0 -> HomePage(viewModel, uiState, serviceEnabled, onOpenAccessibilitySettings, onRequestDeviceAdmin)
                 1 -> BlockPage(viewModel, uiState)
                 2 -> WhitelistPage(viewModel, uiState)
             }
         }
 
-        // Error/Success Messages
         uiState.errorMessage?.let { message ->
             Snackbar(
                 modifier = Modifier.padding(16.dp),
                 action = {
-                    TextButton(onClick = { viewModel.clearMessages() }) {
-                        Text("Dismiss")
-                    }
+                    TextButton(onClick = { viewModel.clearMessages() }) { Text("Dismiss") }
                 }
-            ) {
-                Text("❌ $message")
-            }
+            ) { Text("❌ $message") }
+        }
+
+        uiState.successMessage?.let { message ->
+            Snackbar(
+                modifier = Modifier.padding(16.dp),
+                action = {
+                    TextButton(onClick = { viewModel.clearMessages() }) { Text("OK") }
+                },
+                containerColor = Color(0xFF4CAF50)
+            ) { Text(message, color = Color.White) }
         }
     }
 }
+
+// ==================================
+// HOME PAGE
+// ==================================
 
 @Composable
 fun HomePage(
     viewModel: AuthViewModel,
     uiState: com.focusapp.blocker.ui.AppUiState,
     serviceEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit
+    onOpenAccessibilitySettings: () -> Unit,
+    onRequestDeviceAdmin: () -> Unit
 ) {
+    val context = LocalContext.current
+
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Status Card (Focus Mode toggle)
+        // Always-on status
         item {
-            StatusCard(
-                isSessionActive = uiState.isSessionActive,
-                isLoading = uiState.isLoading,
-                onToggle = { viewModel.toggleSession() }
-            )
+            AlwaysOnStatusCard(serviceEnabled)
         }
 
-        // Device Selection Section
-        item {
-            DeviceSelectionCard(
-                devices = uiState.devices,
-                currentDeviceId = uiState.currentDeviceId,
-                allDevicesSelected = uiState.allDevicesSelected,
-                selectedDeviceIds = uiState.selectedDeviceIds,
-                onToggleAllDevices = { viewModel.toggleAllDevices() },
-                onToggleDevice = { viewModel.toggleDevice(it) },
-                onRefresh = { viewModel.fetchDevices() }
-            )
-        }
-
-        // Enable Permissions Card (only show if permissions are NOT granted)
+        // Enable accessibility service warning
         if (!serviceEnabled) {
             item {
-                EnablePermissionsCard(
-                    onOpenSettings = onOpenAccessibilitySettings
-                )
+                EnablePermissionsCard(onOpenSettings = onOpenAccessibilitySettings)
             }
         }
 
-        // Server URL Section
+        // Deletion protection toggle
         item {
-            ServerUrlSection(
-                serverUrl = uiState.serverUrl,
-                onServerUrlChange = { viewModel.updateServerUrl(it) }
+            DeletionProtectionCard(
+                isEnabled = uiState.deletionProtectionEnabled,
+                isPendingDisable = uiState.pendingChanges.any { it.type == "disable_deletion_protection" },
+                pendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_deletion_protection" },
+                onEnable = {
+                    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                    if (dpm.isAdminActive(adminComponent)) {
+                        viewModel.onDeviceAdminEnabled()
+                    } else {
+                        onRequestDeviceAdmin()
+                    }
+                },
+                onRequestDisable = { viewModel.requestDisableDeletionProtection() },
+                onCancelDisable = { change -> viewModel.cancelPendingChange(change.id) }
             )
+        }
+
+        // Pending changes summary (if any)
+        if (uiState.pendingChanges.isNotEmpty()) {
+            item {
+                PendingChangesCard(
+                    pendingChanges = uiState.pendingChanges,
+                    onCancel = { change -> viewModel.cancelPendingChange(change.id) }
+                )
+            }
         }
 
         // Statistics
         item {
             StatsCard(uiState)
         }
+
+        // Advanced Settings
+        item {
+            AdvancedSettingsSection(
+                serverUrl = uiState.serverUrl,
+                onServerUrlChange = { viewModel.updateServerUrl(it) }
+            )
+        }
     }
 }
+
+// ==================================
+// BLOCK PAGE
+// ==================================
 
 @Composable
 fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
@@ -366,18 +411,12 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
     }
 
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Blocked Apps
         item {
-            Text(
-                "Blocked Apps",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Blocked Apps", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputWithPicker(
@@ -388,59 +427,64 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
             )
         }
         items(uiState.blockedPackages.toList()) { packageName ->
-            ItemCard(
+            val pendingRemoval = uiState.pendingChanges.firstOrNull {
+                it.type == "remove_blocked_package" && it.value == packageName
+            }
+            BlockedItemCard(
                 text = packageName,
-                onRemove = { viewModel.removeBlockedPackage(packageName) }
+                pendingChange = pendingRemoval,
+                onRemove = { viewModel.removeBlockedPackage(packageName) },
+                onCancelPending = { pendingRemoval?.let { viewModel.cancelPendingChange(it.id) } }
             )
         }
 
         // Blocked Keywords
         item {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "Blocked Keywords",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Blocked Keywords", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
-            ItemInputSection(
-                placeholder = "gambling",
-                onAdd = { viewModel.addBlockedKeyword(it) }
-            )
+            ItemInputSection(placeholder = "gambling", onAdd = { viewModel.addBlockedKeyword(it) })
         }
         items(uiState.blockedKeywords.toList()) { keyword ->
-            ItemCard(
+            val pendingRemoval = uiState.pendingChanges.firstOrNull {
+                it.type == "remove_blocked_keyword" && it.value == keyword
+            }
+            BlockedItemCard(
                 text = keyword,
-                onRemove = { viewModel.removeBlockedKeyword(keyword) }
+                pendingChange = pendingRemoval,
+                onRemove = { viewModel.removeBlockedKeyword(keyword) },
+                onCancelPending = { pendingRemoval?.let { viewModel.cancelPendingChange(it.id) } }
             )
         }
 
         // Blocked Websites
         item {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "Blocked Websites",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Blocked Websites", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
-            ItemInputSection(
-                placeholder = "facebook.com",
-                onAdd = { viewModel.addBlockedWebsite(it) }
-            )
+            ItemInputSection(placeholder = "facebook.com", onAdd = { viewModel.addBlockedWebsite(it) })
         }
         items(uiState.blockedWebsites.toList()) { website ->
-            ItemCard(
+            val pendingRemoval = uiState.pendingChanges.firstOrNull {
+                it.type == "remove_blocked_website" && it.value == website
+            }
+            BlockedItemCard(
                 text = website,
-                onRemove = { viewModel.removeBlockedWebsite(website) }
+                pendingChange = pendingRemoval,
+                onRemove = { viewModel.removeBlockedWebsite(website) },
+                onCancelPending = { pendingRemoval?.let { viewModel.cancelPendingChange(it.id) } }
             )
         }
 
         item { Spacer(modifier = Modifier.height(32.dp)) }
     }
 }
+
+// ==================================
+// WHITELIST PAGE
+// ==================================
 
 @Composable
 fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
@@ -449,17 +493,17 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
     if (showAppPicker) {
         AppPickerDialog(
             onDismiss = { showAppPicker = false },
-            onAppSelected = { packageName ->
-                viewModel.addWhitelistedPackage(packageName)
-            },
+            onAppSelected = { packageName -> viewModel.addWhitelistedPackage(packageName) },
             title = "Select App to Whitelist"
         )
     }
 
+    // Pending whitelist additions not yet confirmed
+    val pendingWhitelistPackages = uiState.pendingChanges.filter { it.type == "add_whitelisted_package" }
+    val pendingWhitelistWebsites = uiState.pendingChanges.filter { it.type == "add_whitelisted_website" }
+
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
@@ -468,14 +512,10 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "ℹ️ About Whitelists",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("ℹ️ About Whitelists", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Whitelisted apps and websites will NEVER be blocked, even during focus sessions.",
+                        "Whitelisted apps and websites are never blocked. Adding items takes 24 hours to take effect.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -484,11 +524,7 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
 
         // Whitelisted Apps
         item {
-            Text(
-                "Whitelisted Apps",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Whitelisted Apps", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputWithPicker(
@@ -505,21 +541,22 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
                 isProtected = packageName == "com.focusapp.blocker"
             )
         }
+        // Pending whitelist package additions
+        items(pendingWhitelistPackages) { change ->
+            PendingAddCard(
+                text = change.value ?: "",
+                scheduledFor = change.scheduledFor,
+                onCancel = { viewModel.cancelPendingChange(change.id) }
+            )
+        }
 
         // Whitelisted Websites
         item {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                "Whitelisted Websites",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Whitelisted Websites", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
-            ItemInputSection(
-                placeholder = "yourbank.com",
-                onAdd = { viewModel.addWhitelistedWebsite(it) }
-            )
+            ItemInputSection(placeholder = "yourbank.com", onAdd = { viewModel.addWhitelistedWebsite(it) })
         }
         items(uiState.whitelistedWebsites.toList()) { website ->
             ItemCard(
@@ -527,17 +564,29 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
                 onRemove = { viewModel.removeWhitelistedWebsite(website) }
             )
         }
+        // Pending whitelist website additions
+        items(pendingWhitelistWebsites) { change ->
+            PendingAddCard(
+                text = change.value ?: "",
+                scheduledFor = change.scheduledFor,
+                onCancel = { viewModel.cancelPendingChange(change.id) }
+            )
+        }
 
         item { Spacer(modifier = Modifier.height(32.dp)) }
     }
 }
 
+// ==================================
+// UI COMPONENTS
+// ==================================
+
 @Composable
-fun StatusCard(isSessionActive: Boolean, isLoading: Boolean, onToggle: () -> Unit) {
+fun AlwaysOnStatusCard(serviceEnabled: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSessionActive) Color(0xFF4CAF50) else Color(0xFFFF9800)
+            containerColor = if (serviceEnabled) Color(0xFF4CAF50) else Color(0xFFFF9800)
         )
     ) {
         Column(
@@ -545,33 +594,182 @@ fun StatusCard(isSessionActive: Boolean, isLoading: Boolean, onToggle: () -> Uni
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = if (isSessionActive) "🔒 FOCUS MODE ACTIVE" else "⏸️ Focus Mode Inactive",
+                text = if (serviceEnabled) "🔒 FOCUS MODE ACTIVE" else "⚠️ Service Not Running",
                 style = MaterialTheme.typography.titleLarge,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (serviceEnabled)
+                    "Blocking is always on — distraction-free by default"
+                else
+                    "Enable the accessibility service to start blocking",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.9f)
+            )
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (isLoading) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
-            } else {
-                Button(
-                    onClick = onToggle,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White.copy(alpha = 0.2f),
-                        contentColor = Color.White
+@Composable
+fun DeletionProtectionCard(
+    isEnabled: Boolean,
+    isPendingDisable: Boolean,
+    pendingChange: PendingChange?,
+    onEnable: () -> Unit,
+    onRequestDisable: () -> Unit,
+    onCancelDisable: (PendingChange) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isEnabled) Color(0xFFE3F2FD) else Color(0xFFF5F5F5)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = if (isEnabled) Color(0xFF1565C0) else Color.Gray
                     )
-                ) {
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isSessionActive) "⏸️ STOP FOCUS SESSION" else "▶️ START FOCUS SESSION",
-                        style = MaterialTheme.typography.titleMedium,
+                        "Deletion Protection",
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                 }
+                Text(
+                    if (isEnabled) "🔒 ON" else "OFF",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isEnabled) Color(0xFF1565C0) else Color.Gray
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "When enabled, the app becomes a Device Administrator. " +
+                    "Android requires deactivating admin status before the app can be uninstalled.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (!isEnabled && !isPendingDisable) {
+                Button(
+                    onClick = onEnable,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+                ) {
+                    Text("Enable Deletion Protection")
+                }
+            } else if (isEnabled && !isPendingDisable) {
+                OutlinedButton(
+                    onClick = onRequestDisable,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Request to Disable (24h delay)")
+                }
+            } else if (isPendingDisable && pendingChange != null) {
+                // Show pending disable with countdown and cancel option
+                val hoursLeft = hoursUntil(pendingChange.scheduledFor)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "⏳ Disabling in ~${hoursLeft}h",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE65100)
+                            )
+                            Text(
+                                "Tap cancel to keep protection on",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+                        TextButton(
+                            onClick = { onCancelDisable(pendingChange) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PendingChangesCard(
+    pendingChanges: List<PendingChange>,
+    onCancel: (PendingChange) -> Unit
+) {
+    // Exclude deletion protection from this summary (it has its own card)
+    val displayChanges = pendingChanges.filter { it.type != "disable_deletion_protection" }
+    if (displayChanges.isEmpty()) return
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "⏳ Scheduled Changes (${displayChanges.size})",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFE65100)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "These changes will take effect after 24 hours. Tap × to cancel.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            displayChanges.forEach { change ->
+                val hoursLeft = hoursUntil(change.scheduledFor)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            formatChangeType(change.type),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        Text(
+                            change.value ?: "",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Text(
+                        "~${hoursLeft}h",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE65100)
+                    )
+                    IconButton(onClick = { onCancel(change) }) {
+                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.Red, modifier = Modifier.size(18.dp))
+                    }
+                }
+                Divider(color = Color(0xFFFFE082))
             }
         }
     }
@@ -581,32 +779,18 @@ fun StatusCard(isSessionActive: Boolean, isLoading: Boolean, onToggle: () -> Uni
 fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFFFFEBEE)
-        )
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "⚠️ Enable Permissions",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFFC62828)
-                )
-            }
+            Text(
+                "⚠️ Enable Permissions",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFC62828)
+            )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "How to enable:",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF424242)
-            )
-            Text(
-                "1. Tap the button below\n2. Go to \"downloaded apps -> Focus Blocker\"\n3. Toggle \"Use Focus Blocker\" ON",
+                "1. Tap the button below\n2. Go to \"Downloaded apps → Focus Blocker\"\n3. Toggle \"Use Focus Blocker\" ON",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -614,65 +798,11 @@ fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
             Button(
                 onClick = onOpenSettings,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFF44336)
-                )
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336))
             ) {
                 Icon(Icons.Default.Settings, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Open Accessibility Settings")
-            }
-        }
-    }
-}
-
-@Composable
-fun ServiceStatusCard(onOpenSettings: () -> Unit, isServiceEnabled: Boolean) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isServiceEnabled) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "⚙️ Accessibility Service",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    if (isServiceEnabled) "✅ ENABLED" else "❌ DISABLED",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isServiceEnabled) Color(0xFF4CAF50) else Color(0xFFF44336)
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                if (isServiceEnabled) {
-                    "Service is running in the background. Blocking is active!"
-                } else {
-                    "⚠️ Service NOT running! Enable it for blocking to work."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isServiceEnabled) Color(0xFF2E7D32) else Color(0xFFC62828)
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = onOpenSettings,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isServiceEnabled) Color(0xFF4CAF50) else Color(0xFFF44336)
-                )
-            ) {
-                Icon(Icons.Default.Settings, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(if (isServiceEnabled) "Manage Settings" else "Enable Service")
             }
         }
     }
@@ -685,25 +815,15 @@ fun StatsCard(uiState: com.focusapp.blocker.ui.AppUiState) {
         colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                "📊 Current Configuration",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
+            Text("📊 Current Configuration", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 StatItem("Blocked Apps", uiState.blockedPackages.size.toString())
                 StatItem("Blocked Keywords", uiState.blockedKeywords.size.toString())
                 StatItem("Blocked Sites", uiState.blockedWebsites.size.toString())
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 StatItem("Whitelisted Apps", uiState.whitelistedPackages.size.toString())
                 StatItem("Whitelisted Sites", uiState.whitelistedWebsites.size.toString())
                 Spacer(modifier = Modifier.weight(1f))
@@ -715,196 +835,122 @@ fun StatsCard(uiState: com.focusapp.blocker.ui.AppUiState) {
 @Composable
 fun StatItem(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            value,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.Gray
-        )
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
     }
 }
 
 @Composable
-fun DeviceSelectionCard(
-    devices: List<com.focusapp.blocker.data.Device>,
-    currentDeviceId: String?,
-    allDevicesSelected: Boolean,
-    selectedDeviceIds: Set<String>,
-    onToggleAllDevices: () -> Unit,
-    onToggleDevice: (String) -> Unit,
-    onRefresh: () -> Unit
-) {
+fun AdvancedSettingsSection(serverUrl: String, onServerUrlChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    var editedUrl by remember { mutableStateOf(serverUrl) }
+
+    LaunchedEffect(serverUrl) { editedUrl = serverUrl }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Devices, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
+                Text("Advanced Settings", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Color.Gray
+                )
+            }
+            if (expanded) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Backend Server URL", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = editedUrl,
+                    onValueChange = { editedUrl = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("https://focus-blocker-backend.onrender.com") },
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { onServerUrlChange(editedUrl) }, modifier = Modifier.align(Alignment.End)) {
+                    Text("Save URL")
+                }
+            }
+        }
+    }
+}
+
+/** Shows a blocked item. If a pending removal exists, shows an orange warning + cancel instead of the X. */
+@Composable
+fun BlockedItemCard(
+    text: String,
+    pendingChange: PendingChange?,
+    onRemove: () -> Unit,
+    onCancelPending: () -> Unit
+) {
+    val hasPending = pendingChange != null
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (hasPending) Color(0xFFFFF3E0) else Color(0xFFF5F5F5)
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text)
+                if (hasPending) {
+                    val hoursLeft = hoursUntil(pendingChange!!.scheduledFor)
                     Text(
-                        "Select Devices for Session",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        "⏳ Removing in ~${hoursLeft}h",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE65100)
                     )
                 }
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh devices", modifier = Modifier.size(20.dp))
-                }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // All Devices checkbox
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleAllDevices() }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = allDevicesSelected,
-                    onCheckedChange = { onToggleAllDevices() }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "All Devices",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // Individual devices
-            if (devices.isEmpty()) {
-                Text(
-                    "No devices registered yet",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(start = 48.dp)
-                )
+            if (hasPending) {
+                TextButton(
+                    onClick = onCancelPending,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+                ) { Text("Undo") }
             } else {
-                devices.forEach { device ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !allDevicesSelected) { onToggleDevice(device.id) }
-                            .padding(vertical = 4.dp, horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            Checkbox(
-                                checked = allDevicesSelected || selectedDeviceIds.contains(device.id),
-                                onCheckedChange = { onToggleDevice(device.id) },
-                                enabled = !allDevicesSelected
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                if (device.type == "android") Icons.Default.PhoneAndroid else Icons.Default.Computer,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp),
-                                tint = Color.Gray
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            val isCurrentDevice = device.id == currentDeviceId
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        device.name,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    if (isCurrentDevice) {
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            "(This device)",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                Text(
-                                    "${device.type} - ${device.platform}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
-                        }
-                        Text(
-                            if (device.isOnline) "Online" else "Offline",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (device.isOnline) Color(0xFF4CAF50) else Color.Gray
-                        )
-                    }
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
                 }
             }
         }
     }
 }
 
+/** Shows a pending whitelist addition (not yet active). */
 @Composable
-fun ServerUrlSection(serverUrl: String, onServerUrlChange: (String) -> Unit) {
-    var editedUrl by remember { mutableStateOf(serverUrl) }
-
-    LaunchedEffect(serverUrl) {
-        editedUrl = serverUrl
-    }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Backend Server URL", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = editedUrl,
-                onValueChange = { editedUrl = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("http://10.0.2.2:3000") },
-                singleLine = true
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = { onServerUrlChange(editedUrl) },
-                modifier = Modifier.align(Alignment.End)
-            ) {
-                Text("Save URL")
-            }
-        }
-    }
-}
-
-@Composable
-fun ItemInputSection(placeholder: String, onAdd: (String) -> Unit) {
-    var text by remember { mutableStateOf("") }
-
-    Row(
+fun PendingAddCard(text: String, scheduledFor: String, onCancel: () -> Unit) {
+    val hoursLeft = hoursUntil(scheduledFor)
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
     ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text(placeholder) },
-            singleLine = true
-        )
-        IconButton(
-            onClick = {
-                if (text.isNotBlank()) {
-                    onAdd(text.trim())
-                    text = ""
-                }
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.Add, contentDescription = "Add")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text)
+                Text(
+                    "⏳ Will be whitelisted in ~${hoursLeft}h",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFE65100)
+                )
+            }
+            TextButton(
+                onClick = onCancel,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+            ) { Text("Cancel") }
         }
     }
 }
@@ -918,16 +964,12 @@ fun ItemCard(text: String, onRemove: () -> Unit, isProtected: Boolean = false) {
         )
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                if (isProtected) {
-                    Text("🔒 ", fontSize = MaterialTheme.typography.bodyLarge.fontSize)
-                }
+                if (isProtected) Text("🔒 ", fontSize = MaterialTheme.typography.bodyLarge.fontSize)
                 Text(text)
             }
             if (!isProtected) {
@@ -935,11 +977,67 @@ fun ItemCard(text: String, onRemove: () -> Unit, isProtected: Boolean = false) {
                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
                 }
             } else {
-                Text(
-                    "Protected",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF4CAF50)
-                )
+                Text("Protected", style = MaterialTheme.typography.bodySmall, color = Color(0xFF4CAF50))
+            }
+        }
+    }
+}
+
+@Composable
+fun ItemInputSection(placeholder: String, onAdd: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.weight(1f),
+            placeholder = { Text(placeholder) },
+            singleLine = true
+        )
+        IconButton(onClick = {
+            if (text.isNotBlank()) { onAdd(text.trim()); text = "" }
+        }) {
+            Icon(Icons.Default.Add, contentDescription = "Add")
+        }
+    }
+}
+
+@Composable
+fun ItemInputWithPicker(
+    placeholder: String,
+    onAdd: (String) -> Unit,
+    showAppPicker: Boolean = false,
+    onPickApp: () -> Unit = {}
+) {
+    var text by remember { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(placeholder) },
+                singleLine = true
+            )
+            IconButton(onClick = {
+                if (text.isNotBlank()) { onAdd(text.trim()); text = "" }
+            }) {
+                Icon(Icons.Default.Add, contentDescription = "Add manually")
+            }
+        }
+        if (showAppPicker) {
+            OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Apps, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Pick from Installed Apps")
             }
         }
     }
@@ -956,15 +1054,11 @@ fun AppPickerDialog(
     var apps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(searchQuery) {
         isLoading = true
-        apps = if (searchQuery.isBlank()) {
-            appPickerHelper.getInstalledApps()
-        } else {
-            appPickerHelper.searchApps(searchQuery)
-        }
+        apps = if (searchQuery.isBlank()) appPickerHelper.getInstalledApps()
+        else appPickerHelper.searchApps(searchQuery)
         isLoading = false
     }
 
@@ -982,39 +1076,20 @@ fun AppPickerDialog(
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-
                 if (isLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(300.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
+                    Box(modifier = Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(300.dp)
-                    ) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(300.dp)) {
                         items(apps) { app ->
-                            AppPickerItem(
-                                appInfo = app,
-                                onClick = {
-                                    onAppSelected(app.packageName)
-                                    onDismiss()
-                                }
-                            )
+                            AppPickerItem(appInfo = app, onClick = { onAppSelected(app.packageName); onDismiss() })
                         }
-
                         if (apps.isEmpty()) {
                             item {
                                 Text(
                                     "No apps found",
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.Gray
                                 )
@@ -1025,9 +1100,7 @@ fun AppPickerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }
@@ -1035,90 +1108,46 @@ fun AppPickerDialog(
 @Composable
 fun AppPickerItem(appInfo: AppInfo, onClick: () -> Unit) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (appInfo.icon != null) {
-            val bitmap = remember(appInfo.icon) {
-                appInfo.icon.toBitmap(48, 48).asImageBitmap()
-            }
-            Image(
-                bitmap = bitmap,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp)
-            )
+            val bitmap = remember(appInfo.icon) { appInfo.icon.toBitmap(48, 48).asImageBitmap() }
+            Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.size(48.dp))
         } else {
-            Icon(
-                Icons.Default.Apps,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = Color.Gray
-            )
+            Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
         }
-
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                appInfo.appName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                appInfo.packageName,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
-            )
+            Text(appInfo.appName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(appInfo.packageName, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         }
     }
     Divider()
 }
 
-@Composable
-fun ItemInputWithPicker(
-    placeholder: String,
-    onAdd: (String) -> Unit,
-    showAppPicker: Boolean = false,
-    onPickApp: () -> Unit = {}
-) {
-    var text by remember { mutableStateOf("") }
+// ==================================
+// HELPERS
+// ==================================
 
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(placeholder) },
-                singleLine = true
-            )
-            IconButton(
-                onClick = {
-                    if (text.isNotBlank()) {
-                        onAdd(text.trim())
-                        text = ""
-                    }
-                }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add manually")
-            }
-        }
-
-        if (showAppPicker) {
-            OutlinedButton(
-                onClick = onPickApp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Apps, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Pick from Installed Apps")
-            }
-        }
+/** Returns approximate hours until the ISO date string. */
+fun hoursUntil(isoDate: String): Long {
+    return try {
+        val target = Instant.parse(isoDate)
+        val now = Instant.now()
+        val hours = ChronoUnit.HOURS.between(now, target)
+        maxOf(0L, hours)
+    } catch (e: Exception) {
+        24L
     }
+}
+
+fun formatChangeType(type: String): String = when (type) {
+    "remove_blocked_website" -> "Remove blocked website"
+    "remove_blocked_package" -> "Remove blocked app"
+    "remove_blocked_keyword" -> "Remove blocked keyword"
+    "add_whitelisted_website" -> "Add whitelisted website"
+    "add_whitelisted_package" -> "Add whitelisted app"
+    "disable_deletion_protection" -> "Disable deletion protection"
+    else -> type
 }

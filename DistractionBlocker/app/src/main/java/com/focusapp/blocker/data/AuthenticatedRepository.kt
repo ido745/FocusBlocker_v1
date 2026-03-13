@@ -23,30 +23,55 @@ class AuthenticatedRepository(
             level = HttpLoggingInterceptor.Level.BODY
         }
 
-        // Auth interceptor to add Authorization header
         val authInterceptor = Interceptor { chain ->
             val requestBuilder = chain.request().newBuilder()
-
-            // Get auth token synchronously (we're in an interceptor)
             val token = runCatching {
                 kotlinx.coroutines.runBlocking {
                     authManager.authToken.first()
                 }
             }.getOrNull()
-
             if (!token.isNullOrBlank()) {
                 requestBuilder.addHeader("Authorization", "Bearer $token")
             }
-
             chain.proceed(requestBuilder.build())
+        }
+
+        val retryInterceptor = Interceptor { chain ->
+            var request = chain.request()
+            var response: okhttp3.Response? = null
+            var exception: java.io.IOException? = null
+            val maxRetries = 2
+
+            for (attempt in 0..maxRetries) {
+                try {
+                    response?.close()
+                    response = chain.proceed(request)
+                    if (response.isSuccessful || response.code != 503) {
+                        return@Interceptor response
+                    }
+                    if (attempt < maxRetries) {
+                        Log.d(TAG, "Server may be waking up (503), retrying in 3s... (attempt ${attempt + 1}/$maxRetries)")
+                        Thread.sleep(3000)
+                    }
+                } catch (e: java.io.IOException) {
+                    exception = e
+                    if (attempt < maxRetries) {
+                        Log.d(TAG, "Connection failed, retrying in 3s... (attempt ${attempt + 1}/$maxRetries)")
+                        Thread.sleep(3000)
+                    }
+                }
+            }
+
+            response ?: throw (exception ?: java.io.IOException("Unknown error after retries"))
         }
 
         val client = OkHttpClient.Builder()
             .addInterceptor(logging)
             .addInterceptor(authInterceptor)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .addInterceptor(retryInterceptor)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .build()
 
         Retrofit.Builder()
@@ -63,14 +88,9 @@ class AuthenticatedRepository(
         return try {
             val request = RegisterRequest(email, password, name)
             val response = apiService.register(request)
-
             if (response.success && response.token != null && response.user != null) {
-                // Save auth token
                 authManager.saveAuthToken(response.token, email, name)
-
-                // Register device
                 registerDevice()
-
                 Result.success(response.user)
             } else {
                 Result.failure(Exception(response.error ?: "Registration failed"))
@@ -85,14 +105,9 @@ class AuthenticatedRepository(
         return try {
             val request = LoginRequest(email, password)
             val response = apiService.login(request)
-
             if (response.success && response.token != null && response.user != null) {
-                // Save auth token
                 authManager.saveAuthToken(response.token, email, response.user.name)
-
-                // Register device
                 registerDevice()
-
                 Result.success(response.user)
             } else {
                 Result.failure(Exception(response.error ?: "Login failed"))
@@ -107,14 +122,9 @@ class AuthenticatedRepository(
         return try {
             val request = GoogleAuthRequest(idToken)
             val response = apiService.googleAuth(request)
-
             if (response.success && response.token != null && response.user != null) {
-                // Save auth token
                 authManager.saveAuthToken(response.token, response.user.email, response.user.name)
-
-                // Register device
                 registerDevice()
-
                 Result.success(response.user)
             } else {
                 Result.failure(Exception(response.error ?: "Google auth failed"))
@@ -135,9 +145,7 @@ class AuthenticatedRepository(
                 deviceType = "android",
                 platform = "android"
             )
-
             val response = apiService.registerDevice(request)
-
             if (response.success) {
                 Log.d(TAG, "Device registered: ${response.device.name}")
                 Result.success(response.device)
@@ -176,60 +184,16 @@ class AuthenticatedRepository(
         }
     }
 
-    // ================== Session Management ==================
-
-    suspend fun startSession(
-        targetDevices: Any = "all",
-        blockedWebsites: List<String>? = null,
-        blockedPackages: List<String>? = null,
-        blockedKeywords: List<String>? = null,
-        duration: Int? = null
-    ): Result<Session?> {
-        return try {
-            val request = SessionStartRequest(
-                targetDevices = targetDevices,
-                blockedWebsites = blockedWebsites,
-                blockedPackages = blockedPackages,
-                blockedKeywords = blockedKeywords,
-                duration = duration
-            )
-
-            val response = apiService.startSession(request)
-
-            if (response.success) {
-                Result.success(response.session)
-            } else {
-                Result.failure(Exception(response.message ?: "Failed to start session"))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting session", e)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun stopSession(): Result<Unit> {
-        return try {
-            val response = apiService.stopSession()
-            if (response.success) {
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception(response.message ?: "Failed to stop session"))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping session", e)
-            Result.failure(e)
-        }
-    }
+    // ================== Session (Always-On) ==================
 
     suspend fun getActiveSession(): Result<Session?> {
         return try {
             val deviceId = authManager.getDeviceId()
             val response = apiService.getActiveSession(deviceId)
-
             if (response.success) {
                 Result.success(response.session)
             } else {
-                Result.success(null) // No active session
+                Result.success(null)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting active session", e)
@@ -239,11 +203,17 @@ class AuthenticatedRepository(
 
     // ================== Configuration ==================
 
-    suspend fun getConfig(): Result<Pair<Blocklists, Whitelists>> {
+    suspend fun getConfig(): Result<Triple<Blocklists, Whitelists, Boolean>> {
         return try {
             val response = apiService.getConfig()
             if (response.success) {
-                Result.success(Pair(response.blocklists, response.whitelists))
+                Result.success(
+                    Triple(
+                        response.blocklists,
+                        response.whitelists,
+                        response.deletionProtectionEnabled ?: false
+                    )
+                )
             } else {
                 Result.failure(Exception("Failed to get config"))
             }
@@ -258,26 +228,83 @@ class AuthenticatedRepository(
         blockedPackages: List<String>? = null,
         blockedKeywords: List<String>? = null,
         whitelistedWebsites: List<String>? = null,
-        whitelistedPackages: List<String>? = null
-    ): Result<Pair<Blocklists, Whitelists>> {
+        whitelistedPackages: List<String>? = null,
+        deletionProtectionEnabled: Boolean? = null
+    ): Result<Triple<Blocklists, Whitelists, Boolean>> {
         return try {
             val request = ConfigUpdateRequest(
                 blockedWebsites = blockedWebsites,
                 blockedPackages = blockedPackages,
                 blockedKeywords = blockedKeywords,
                 whitelistedWebsites = whitelistedWebsites,
-                whitelistedPackages = whitelistedPackages
+                whitelistedPackages = whitelistedPackages,
+                deletionProtectionEnabled = deletionProtectionEnabled
             )
-
             val response = apiService.updateConfigAuth(request)
-
             if (response.success) {
-                Result.success(Pair(response.blocklists, response.whitelists))
+                Result.success(
+                    Triple(
+                        response.blocklists,
+                        response.whitelists,
+                        response.deletionProtectionEnabled ?: false
+                    )
+                )
             } else {
                 Result.failure(Exception("Failed to update config"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error updating config", e)
+            Result.failure(e)
+        }
+    }
+
+    // ================== Pending Changes ==================
+
+    suspend fun getPendingChanges(): Result<List<PendingChange>> {
+        return try {
+            val response = apiService.getPendingChanges()
+            if (response.success) {
+                Result.success(response.pendingChanges)
+            } else {
+                Result.failure(Exception("Failed to get pending changes"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting pending changes", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Queues a constraint-relaxing change with a 24-hour delay.
+     */
+    suspend fun addPendingChange(type: String, value: String?): Result<PendingChange> {
+        return try {
+            val request = AddPendingChangeRequest(type = type, value = value)
+            val response = apiService.addPendingChange(request)
+            if (response.success && response.change != null) {
+                Result.success(response.change)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to queue change"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding pending change", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Cancels a queued pending change (user changed their mind within 24 hours).
+     */
+    suspend fun cancelPendingChange(changeId: String): Result<Unit> {
+        return try {
+            val response = apiService.cancelPendingChange(changeId)
+            if (response.success) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to cancel change"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cancelling pending change", e)
             Result.failure(e)
         }
     }

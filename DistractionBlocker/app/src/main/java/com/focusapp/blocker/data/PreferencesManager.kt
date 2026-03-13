@@ -22,7 +22,7 @@ class PreferencesManager(private val context: Context) {
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[SERVER_URL] ?: "http://10.0.2.2:3000"
+        preferences[SERVER_URL] ?: "https://focus-blocker-backend.onrender.com"
     }
 
     val blockedPackages: Flow<Set<String>> = context.dataStore.data.map { preferences ->

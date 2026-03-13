@@ -1,11 +1,13 @@
 package com.focusapp.blocker.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Path
 import retrofit2.http.Query
 
-// ================== Legacy Endpoints (unauthenticated) ==================
+// ================== Legacy data classes (kept for compatibility) ==================
 
 data class StatusResponse(
     val success: Boolean,
@@ -45,7 +47,7 @@ data class ConfigResponse(
     val data: SessionState
 )
 
-// ================== New Authenticated Endpoints ==================
+// ================== Authenticated Endpoints ==================
 
 data class RegisterRequest(
     val email: String,
@@ -103,7 +105,7 @@ data class DevicesResponse(
 )
 
 data class SessionStartRequest(
-    val targetDevices: Any, // "all" or List<String>
+    val targetDevices: Any,
     val blockedWebsites: List<String>? = null,
     val blockedPackages: List<String>? = null,
     val blockedKeywords: List<String>? = null,
@@ -125,13 +127,15 @@ data class Session(
     val whitelistedWebsites: List<String>? = null,
     val whitelistedPackages: List<String>? = null,
     val startTime: String? = null,
-    val endTime: String? = null
+    val endTime: String? = null,
+    val deletionProtectionEnabled: Boolean? = null
 )
 
 data class ConfigGetResponse(
     val success: Boolean,
     val blocklists: Blocklists,
-    val whitelists: Whitelists
+    val whitelists: Whitelists,
+    val deletionProtectionEnabled: Boolean? = null
 )
 
 data class Blocklists(
@@ -150,14 +154,55 @@ data class ConfigUpdateRequest(
     val blockedPackages: List<String>? = null,
     val blockedKeywords: List<String>? = null,
     val whitelistedWebsites: List<String>? = null,
-    val whitelistedPackages: List<String>? = null
+    val whitelistedPackages: List<String>? = null,
+    val deletionProtectionEnabled: Boolean? = null
 )
 
 data class ConfigUpdateResponse(
     val success: Boolean,
     val blocklists: Blocklists,
-    val whitelists: Whitelists
+    val whitelists: Whitelists,
+    val deletionProtectionEnabled: Boolean? = null
 )
+
+// ================== Pending Changes ==================
+
+/**
+ * Types of constraint-relaxing changes that require a 24-hour delay:
+ * - remove_blocked_website / remove_blocked_package / remove_blocked_keyword
+ * - add_whitelisted_website / add_whitelisted_package
+ * - disable_deletion_protection
+ */
+data class PendingChange(
+    val id: String,
+    val type: String,
+    val value: String?,
+    val createdAt: String,
+    val scheduledFor: String
+)
+
+data class PendingChangesResponse(
+    val success: Boolean,
+    val pendingChanges: List<PendingChange>
+)
+
+data class AddPendingChangeRequest(
+    val type: String,
+    val value: String?
+)
+
+data class AddPendingChangeResponse(
+    val success: Boolean,
+    val change: PendingChange?,
+    val message: String? = null
+)
+
+data class CancelPendingChangeResponse(
+    val success: Boolean,
+    val message: String? = null
+)
+
+// ================== API Service Interface ==================
 
 interface ApiService {
     // ================== Legacy Endpoints (backward compatibility) ==================
@@ -170,9 +215,8 @@ interface ApiService {
     @POST("config")
     suspend fun updateConfig(@Body config: ConfigRequest): ConfigResponse
 
-    // ================== New Authenticated Endpoints ==================
+    // ================== Authentication ==================
 
-    // Authentication
     @POST("auth/register")
     suspend fun register(@Body request: RegisterRequest): AuthResponse
 
@@ -182,14 +226,16 @@ interface ApiService {
     @POST("auth/google")
     suspend fun googleAuth(@Body request: GoogleAuthRequest): AuthResponse
 
-    // Device Management
+    // ================== Device Management ==================
+
     @POST("devices/register")
     suspend fun registerDevice(@Body request: DeviceRegistrationRequest): DeviceRegistrationResponse
 
     @GET("devices")
     suspend fun getDevices(): DevicesResponse
 
-    // Session Management (Multi-Device)
+    // ================== Session (Always-On) ==================
+
     @POST("sessions/start")
     suspend fun startSession(@Body request: SessionStartRequest): SessionResponse
 
@@ -199,10 +245,22 @@ interface ApiService {
     @GET("sessions/active")
     suspend fun getActiveSession(@Query("deviceId") deviceId: String): SessionResponse
 
-    // Configuration Management
+    // ================== Configuration ==================
+
     @GET("config")
     suspend fun getConfig(): ConfigGetResponse
 
     @POST("config")
     suspend fun updateConfigAuth(@Body request: ConfigUpdateRequest): ConfigUpdateResponse
+
+    // ================== Pending Changes ==================
+
+    @GET("config/pending")
+    suspend fun getPendingChanges(): PendingChangesResponse
+
+    @POST("config/pending")
+    suspend fun addPendingChange(@Body request: AddPendingChangeRequest): AddPendingChangeResponse
+
+    @DELETE("config/pending/{id}")
+    suspend fun cancelPendingChange(@Path("id") changeId: String): CancelPendingChangeResponse
 }

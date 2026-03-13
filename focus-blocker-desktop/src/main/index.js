@@ -10,23 +10,23 @@ const http = require('http');
 const url = require('url');
 
 const store = new Store();
-const API_URL = 'http://127.0.0.1:3000'; // Use IPv4 instead of localhost
+const API_URL = 'https://focus-blocker-backend.onrender.com';
 const BLOCKED_REDIRECT_URL = 'https://blocked.freedom.to/';
 
-// Google OAuth Configuration
-// You need to create a Desktop App OAuth client in Google Cloud Console
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '42261799101-98ejerodh6qhv2rg9jd2s0b7ontmc9pj.apps.googleusercontent.com';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
+// Google OAuth Configuration (loaded from gitignored credentials.js)
+const credentials = (() => { try { return require('./credentials'); } catch (_) { return {}; } })();
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || credentials.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || credentials.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_REDIRECT_PORT = 8089;
 
 let mainWindow;
 let tray;
 let browserMonitorInterval;
-let sessionPollInterval;
-let currentSession = null;
+let configPollInterval;
+let currentConfig = null; // Always-on blocking config from server
 let authToken = null;
 let deviceId = null;
-let lastRedirectTime = 0; // Prevent rapid redirects
+let lastRedirectTime = 0;
 
 // ==================================
 // APP LIFECYCLE
@@ -36,14 +36,12 @@ app.whenReady().then(() => {
   initializeApp();
 });
 
-// Set isQuitting flag when app is about to quit
 app.on('before-quit', () => {
   app.isQuitting = true;
 });
 
 app.on('window-all-closed', () => {
-  // Don't quit - keep running in system tray
-  // The app will only quit when user clicks "Quit" from tray menu
+  // Don't quit — keep running in system tray for always-on blocking
 });
 
 app.on('activate', () => {
@@ -57,23 +55,20 @@ app.on('activate', () => {
 // ==================================
 
 async function initializeApp() {
-  // Load auth token and device ID
   authToken = store.get('authToken');
   deviceId = store.get('deviceId') || uuidv4();
   store.set('deviceId', deviceId);
 
-  // Create windows
   createMainWindow();
   createSystemTray();
 
-  // If logged in, register device and start monitoring
+  // Blocking is always on — start immediately if already authenticated
   if (authToken) {
     await registerDevice();
     startBrowserMonitoring();
-    startSessionPolling();
+    startConfigPolling();
   }
 
-  // Set up IPC handlers
   setupIPC();
 }
 
@@ -93,7 +88,7 @@ function createMainWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-  // Minimize to tray on close instead of quitting
+  // Minimize to tray instead of quitting (blocking continues)
   mainWindow.on('close', (event) => {
     if (!app.isQuitting) {
       event.preventDefault();
@@ -101,7 +96,6 @@ function createMainWindow() {
     }
   });
 
-  // Development mode
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
@@ -111,119 +105,81 @@ function createSystemTray() {
   try {
     const iconPath = path.join(__dirname, '../../assets/icons/icon.png');
     const fs = require('fs');
-
     if (fs.existsSync(iconPath)) {
       const icon = nativeImage.createFromPath(iconPath);
       tray = new Tray(icon.resize({ width: 16, height: 16 }));
     } else {
-      const icon = nativeImage.createEmpty();
-      tray = new Tray(icon);
+      tray = new Tray(nativeImage.createEmpty());
     }
-
     updateTrayMenu();
-
-    tray.on('click', () => {
-      mainWindow.show();
-      mainWindow.focus();
-    });
+    tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
   } catch (error) {
     console.error('System tray creation error:', error);
   }
 }
 
 function updateTrayMenu() {
+  const isBlocking = currentConfig !== null && authToken !== null;
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: currentSession ? '⏸️ Stop Session' : '▶️ Start Session',
-      click: () => {
-        if (currentSession) {
-          stopSession();
-        } else {
-          startSession('all', []);
-        }
-      }
+      label: isBlocking ? '🔒 Blocking Active' : '⏸️ Sign in to enable blocking',
+      enabled: false
     },
     { type: 'separator' },
     {
       label: 'Show App',
-      click: () => {
-        mainWindow.show();
-        mainWindow.focus();
-      }
+      click: () => { mainWindow.show(); mainWindow.focus(); }
     },
     { type: 'separator' },
     {
       label: 'Quit',
-      click: () => {
-        app.isQuitting = true;
-        app.quit();
-      }
+      click: () => { app.isQuitting = true; app.quit(); }
     }
   ]);
-
   tray.setContextMenu(contextMenu);
-  tray.setToolTip(currentSession ? 'Focus Blocker - Session Active' : 'Focus Blocker - Idle');
+  tray.setToolTip(isBlocking ? 'Focus Blocker — Always Blocking' : 'Focus Blocker — Sign in to block');
 }
 
 // ==================================
-// BROWSER MONITORING & REDIRECT
+// BROWSER MONITORING
 // ==================================
 
 function startBrowserMonitoring() {
   if (browserMonitorInterval) return;
-
-  console.log('🔍 Browser monitoring started!');
+  console.log('🔍 Browser monitoring started (always-on blocking)');
 
   browserMonitorInterval = setInterval(async () => {
     try {
-      const window = await activeWin();
+      const win = await activeWin();
+      if (!win) return;
 
-      if (!window) {
+      const isBrowser = checkIfBrowser(win.owner.name);
+      if (!isBrowser) return;
+
+      // Blocking is always active — no session check needed
+      if (!currentConfig || !currentConfig.blockedWebsites) return;
+
+      const titleLower = win.title.toLowerCase();
+      if (titleLower.includes('blocked.freedom.to') || titleLower === 'freedom' ||
+          titleLower.startsWith('freedom |') || titleLower.startsWith('freedom -')) {
         return;
       }
 
-      const isBrowser = checkIfBrowser(window.owner.name);
-      console.log('📍 Active window:', window.owner.name, '| Browser:', isBrowser, '| Title:', window.title?.substring(0, 50));
-
-      if (isBrowser) {
-        const url = extractUrlFromTitle(window.title);
-        console.log('🌐 Extracted URL:', url);
-
-        console.log('📊 Session status:', currentSession ? `Active: ${currentSession.isActive}, Blocked sites: ${JSON.stringify(currentSession.blockedWebsites)}` : 'No session');
-
-        if (currentSession && currentSession.isActive) {
-          // Check if we're already on the blocked page (be specific to avoid false matches)
-          const titleLower = window.title.toLowerCase();
-          if (titleLower.includes('blocked.freedom.to') || titleLower === 'freedom' || titleLower.startsWith('freedom |') || titleLower.startsWith('freedom -')) {
-            console.log('✅ Already on blocked page, skipping');
-            return;
-          }
-
-          if (url) {
-            const blocked = isUrlBlocked(url);
-            console.log('🔍 Is blocked:', blocked);
-
-            if (blocked) {
-              // Prevent rapid redirects (wait at least 1.5 seconds between redirects)
-              const now = Date.now();
-              if (now - lastRedirectTime < 1500) {
-                console.log('⏳ Cooldown active, skipping redirect');
-                return;
-              }
-
-              console.log('🚫 Blocked site detected:', url, '- Redirecting...');
-              lastRedirectTime = now;
-              redirectToBlockedPage();
-            }
-          }
-        } else {
-          console.log('⏸️ No active session');
+      const extractedUrl = extractUrlFromTitle(win.title);
+      if (extractedUrl) {
+        const blocked = isUrlBlocked(extractedUrl);
+        if (blocked) {
+          const now = Date.now();
+          if (now - lastRedirectTime < 1500) return;
+          console.log('🚫 Blocked site detected:', extractedUrl, '- Redirecting...');
+          lastRedirectTime = now;
+          redirectToBlockedPage();
         }
       }
     } catch (error) {
       console.error('Browser monitoring error:', error);
     }
-  }, 2000); // Check every 2 seconds
+  }, 2000);
 }
 
 function stopBrowserMonitoring() {
@@ -235,89 +191,60 @@ function stopBrowserMonitoring() {
 
 function checkIfBrowser(appName) {
   const browsers = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'vivaldi', 'msedge'];
-  const lowerName = appName.toLowerCase();
-  return browsers.some(b => lowerName.includes(b));
+  return browsers.some(b => appName.toLowerCase().includes(b));
 }
 
 function extractUrlFromTitle(title) {
   if (!title) return null;
 
-  // Skip if already on blocked page (be specific to avoid false positives)
   const lowerTitle = title.toLowerCase();
-  if (lowerTitle.includes('blocked.freedom.to') || lowerTitle === 'freedom' || lowerTitle.startsWith('freedom |') || lowerTitle.startsWith('freedom -')) {
+  if (lowerTitle.includes('blocked.freedom.to') || lowerTitle === 'freedom' ||
+      lowerTitle.startsWith('freedom |') || lowerTitle.startsWith('freedom -')) {
     return null;
   }
 
-  // Try to extract a full domain with TLD (e.g., "facebook.com")
   const fullDomainMatch = title.match(/([a-z0-9-]+\.[a-z]{2,}(?:\.[a-z]{2,})?)/i);
-  if (fullDomainMatch) {
-    return fullDomainMatch[1].toLowerCase();
-  }
+  if (fullDomainMatch) return fullDomainMatch[1].toLowerCase();
 
-  // Check for site name at the END of the title (e.g., "Settings - Reddit", "Home | Facebook")
-  // This handles pages like reddit.com/settings where title is "Settings - Reddit"
   const endSiteMatch = title.match(/[-|–—:]\s*([a-zA-Z0-9]+)\s*$/);
   if (endSiteMatch) {
     const siteName = endSiteMatch[1].trim().toLowerCase();
     const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'new', 'tab'];
-    if (!browserNames.includes(siteName) && siteName.length > 2) {
-      console.log('📍 Extracted site from end of title:', siteName);
-      return siteName;
-    }
+    if (!browserNames.includes(siteName) && siteName.length > 2) return siteName;
   }
 
-  // Extract the site name before dash/pipe/colon (e.g., "Reddit - Search", "reddit: settings")
   const siteNameMatch = title.match(/^([a-zA-Z0-9]+)(?:\s*[-|:])/);
   if (siteNameMatch) {
     const siteName = siteNameMatch[1].trim().toLowerCase();
     const browserNames = ['chrome', 'firefox', 'safari', 'edge', 'brave', 'opera', 'new', 'tab'];
-    if (!browserNames.includes(siteName) && siteName.length > 2) {
-      return siteName;
-    }
+    if (!browserNames.includes(siteName) && siteName.length > 2) return siteName;
   }
 
-  // Return the full lowercase title for fallback matching against blocklist
-  // This allows isUrlBlocked to check if any blocked site name appears in the title
   return '__title__:' + lowerTitle;
 }
 
-function isUrlBlocked(url) {
-  if (!currentSession || !currentSession.blockedWebsites) return false;
+function isUrlBlocked(extractedUrl) {
+  if (!currentConfig || !currentConfig.blockedWebsites) return false;
 
-  // Check if this is a fallback title match (prefixed with __title__:)
-  const isTitleFallback = url.startsWith('__title__:');
-  const searchText = isTitleFallback ? url.substring(10) : url.toLowerCase();
+  const isTitleFallback = extractedUrl.startsWith('__title__:');
+  const searchText = isTitleFallback ? extractedUrl.substring(10) : extractedUrl.toLowerCase();
 
-  // Check whitelist first
-  if (currentSession.whitelistedWebsites) {
-    for (const whitelisted of currentSession.whitelistedWebsites) {
-      const whitelistedLower = whitelisted.toLowerCase();
-      const whitelistedBase = whitelistedLower.split('.')[0];
-      if (searchText.includes(whitelistedLower) || searchText.includes(whitelistedBase)) {
-        return false;
-      }
+  if (currentConfig.whitelistedWebsites) {
+    for (const whitelisted of currentConfig.whitelistedWebsites) {
+      const wLower = whitelisted.toLowerCase();
+      const wBase = wLower.split('.')[0];
+      if (searchText.includes(wLower) || searchText.includes(wBase)) return false;
     }
   }
 
-  // Check blocklist
-  for (const blocked of currentSession.blockedWebsites) {
-    const blockedLower = blocked.toLowerCase();
-    const blockedBase = blockedLower.split('.')[0]; // e.g., "reddit" from "reddit.com"
-
-    // For title fallback, check if the blocked site name appears anywhere in the title
+  for (const blocked of currentConfig.blockedWebsites) {
+    const bLower = blocked.toLowerCase();
+    const bBase = bLower.split('.')[0];
     if (isTitleFallback) {
-      if (searchText.includes(blockedBase) && blockedBase.length > 3) {
-        console.log('📍 Title fallback match:', blockedBase, 'found in title');
-        return true;
-      }
+      if (searchText.includes(bBase) && bBase.length > 3) return true;
     } else {
-      // Normal domain matching
-      if (searchText.includes(blockedLower) || blockedLower.includes(searchText)) {
-        return true;
-      }
-      if (searchText === blockedBase || blockedBase.includes(searchText)) {
-        return true;
-      }
+      if (searchText.includes(bLower) || bLower.includes(searchText)) return true;
+      if (searchText === bBase || bBase.includes(searchText)) return true;
     }
   }
 
@@ -329,121 +256,51 @@ function isUrlBlocked(url) {
 // ==================================
 
 function redirectToBlockedPage() {
-  console.log('🔄 Attempting redirect to blocked page...');
-
-  // Close the current tab first (Ctrl+W), then open the blocked page
-  // This is more reliable than trying to replace the URL because:
-  // 1. Even if user interrupts, the blocked tab is already closed
-  // 2. A new clean tab opens with the blocked page
-
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
-# Close the current tab immediately
 [System.Windows.Forms.SendKeys]::SendWait('^w')
-# Small delay then open blocked page in default browser
 Start-Sleep -Milliseconds 100
 Start-Process '${BLOCKED_REDIRECT_URL}'
 `;
-
-  // Write script to temp file and execute (avoids escaping issues)
   const fs = require('fs');
   const tempScript = path.join(app.getPath('temp'), 'redirect.ps1');
-
   fs.writeFileSync(tempScript, psScript);
-
-  exec(`powershell -ExecutionPolicy Bypass -File "${tempScript}"`, (error, stdout, stderr) => {
-    if (error) {
-      console.error('Redirect error:', error);
-      console.error('stderr:', stderr);
-    } else {
-      console.log('✅ Redirected to blocked page');
-    }
-
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tempScript);
-    } catch (e) {
-      // Ignore cleanup errors
-    }
+  exec(`powershell -ExecutionPolicy Bypass -File "${tempScript}"`, (error) => {
+    if (error) console.error('Redirect error:', error);
+    try { fs.unlinkSync(tempScript); } catch (_) {}
   });
 }
 
 // ==================================
-// SESSION MANAGEMENT
+// CONFIG POLLING (always-on — replaces session polling)
 // ==================================
 
-function startSessionPolling() {
-  if (sessionPollInterval) return;
-
-  console.log('📊 Session polling started');
-
-  // Poll immediately on start
-  pollSession();
-
-  sessionPollInterval = setInterval(pollSession, 3000);
+/**
+ * Polls /sessions/active which now always returns the user's blocklist as an active config.
+ * This keeps the local blocklist in sync with any server-side changes (including matured
+ * pending changes applied after 24 hours).
+ */
+function startConfigPolling() {
+  if (configPollInterval) return;
+  console.log('📊 Config polling started');
+  pollConfig();
+  configPollInterval = setInterval(pollConfig, 3000);
 }
 
-async function pollSession() {
+async function pollConfig() {
   try {
     const response = await apiRequest(`/sessions/active?deviceId=${deviceId}`);
-    console.log('📊 Session poll response:', JSON.stringify(response).substring(0, 200));
-
     if (response.success && response.session) {
-      currentSession = response.session;
-      console.log('✅ Session active, blocked sites:', currentSession.blockedWebsites);
-    } else {
-      currentSession = null;
+      currentConfig = response.session;
+      console.log('✅ Config synced, blocked sites:', currentConfig.blockedWebsites?.length || 0);
     }
-
+    // On failure: keep current config so blocking continues
     updateTrayMenu();
-
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('session-updated', currentSession);
+      mainWindow.webContents.send('config-updated', currentConfig);
     }
   } catch (error) {
-    console.error('Session polling error:', error);
-  }
-}
-
-async function startSession(targetDevices, blockedWebsites, blockedPackages, blockedKeywords) {
-  try {
-    const body = { targetDevices };
-    if (blockedWebsites) body.blockedWebsites = blockedWebsites;
-    if (blockedPackages) body.blockedPackages = blockedPackages;
-    if (blockedKeywords) body.blockedKeywords = blockedKeywords;
-
-    const response = await apiRequest('/sessions/start', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-
-    if (response.success) {
-      currentSession = response.session;
-      updateTrayMenu();
-      return { success: true };
-    }
-
-    return { success: false, error: 'Failed to start session' };
-  } catch (error) {
-    console.error('Start session error:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-async function stopSession() {
-  try {
-    await apiRequest('/sessions/stop', {
-      method: 'POST',
-      body: JSON.stringify({})
-    });
-
-    currentSession = null;
-    updateTrayMenu();
-
-    return { success: true };
-  } catch (error) {
-    console.error('Stop session error:', error);
-    return { success: false, error: error.message };
+    console.error('Config polling error (keeping current config):', error);
   }
 }
 
@@ -462,7 +319,6 @@ async function registerDevice() {
         platform: os.platform()
       })
     });
-
     console.log('✅ Device registered');
   } catch (error) {
     console.error('Device registration error:', error);
@@ -473,86 +329,67 @@ async function registerDevice() {
 // API COMMUNICATION
 // ==================================
 
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(endpoint, options = {}, retries = 2) {
   const headers = {
     'Content-Type': 'application/json',
     ...(authToken && { 'Authorization': `Bearer ${authToken}` })
   };
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers
-  });
-
-  return response.json();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+      return await response.json();
+    } catch (error) {
+      if (attempt < retries) {
+        console.log(`⏳ Server may be waking up, retrying in 3s... (attempt ${attempt + 1}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 async function register(email, password, name) {
   try {
-    console.log('🔐 Registering user:', email);
-
     const response = await fetch(`${API_URL}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, name })
     });
-
     const data = await response.json();
-
     if (data.success) {
       authToken = data.token;
       store.set('authToken', authToken);
-
-      console.log('✅ Registration successful, registering device...');
       await registerDevice();
-
-      console.log('🔍 Starting browser monitoring...');
       startBrowserMonitoring();
-
-      console.log('📊 Starting session polling...');
-      startSessionPolling();
-
+      startConfigPolling();
       return { success: true, user: data.user };
     }
-
     return { success: false, error: data.error || 'Registration failed' };
   } catch (error) {
-    console.error('❌ Registration error:', error);
     return { success: false, error: error.message };
   }
 }
 
 async function login(email, password) {
   try {
-    console.log('🔐 Logging in user:', email);
-
     const response = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-
     const data = await response.json();
-
     if (data.success) {
       authToken = data.token;
       store.set('authToken', authToken);
-
-      console.log('✅ Login successful, registering device...');
       await registerDevice();
-
-      console.log('🔍 Starting browser monitoring...');
       startBrowserMonitoring();
-
-      console.log('📊 Starting session polling...');
-      startSessionPolling();
-
+      startConfigPolling();
       return { success: true, user: data.user };
     }
-
     return { success: false, error: data.error || 'Login failed' };
   } catch (error) {
-    console.error('❌ Login error:', error);
     return { success: false, error: error.message };
   }
 }
@@ -562,26 +399,23 @@ async function login(email, password) {
 // ==================================
 
 async function googleSignIn() {
-  return new Promise((resolve, reject) => {
-    // Create a temporary local server to receive the OAuth callback
+  return new Promise((resolve) => {
     const server = http.createServer(async (req, res) => {
       try {
         const parsedUrl = url.parse(req.url, true);
-
         if (parsedUrl.pathname === '/callback') {
           const code = parsedUrl.query.code;
           const error = parsedUrl.query.error;
 
           if (error) {
             res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end('<html><body><h1>Sign-in cancelled</h1><p>You can close this window.</p><script>window.close()</script></body></html>');
+            res.end('<html><body><h1>Sign-in cancelled</h1><script>window.close()</script></body></html>');
             server.close();
             resolve({ success: false, error: 'Sign-in cancelled' });
             return;
           }
 
           if (code) {
-            // Exchange code for tokens
             try {
               const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
@@ -594,36 +428,29 @@ async function googleSignIn() {
                   grant_type: 'authorization_code'
                 })
               });
-
               const tokens = await tokenResponse.json();
 
               if (tokens.id_token) {
-                // Send ID token to our backend
                 const backendResponse = await fetch(`${API_URL}/auth/google`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ idToken: tokens.id_token })
                 });
-
                 const backendData = await backendResponse.json();
 
                 if (backendData.success) {
                   authToken = backendData.token;
                   store.set('authToken', authToken);
-
-                  // Store user info
                   if (backendData.user) {
                     store.set('userEmail', backendData.user.email);
                     store.set('userName', backendData.user.name);
                     store.set('userPicture', backendData.user.picture);
                   }
-
                   await registerDevice();
                   startBrowserMonitoring();
-                  startSessionPolling();
-
+                  startConfigPolling();
                   res.writeHead(200, { 'Content-Type': 'text/html' });
-                  res.end('<html><body><h1>Sign-in successful!</h1><p>You can close this window and return to the app.</p><script>window.close()</script></body></html>');
+                  res.end('<html><body><h1>Sign-in successful!</h1><p>You can close this window.</p><script>window.close()</script></body></html>');
                   server.close();
                   resolve({ success: true, user: backendData.user });
                 } else {
@@ -639,7 +466,6 @@ async function googleSignIn() {
                 resolve({ success: false, error: 'No ID token received' });
               }
             } catch (tokenError) {
-              console.error('Token exchange error:', tokenError);
               res.writeHead(200, { 'Content-Type': 'text/html' });
               res.end(`<html><body><h1>Sign-in failed</h1><p>${tokenError.message}</p><script>window.close()</script></body></html>`);
               server.close();
@@ -651,7 +477,6 @@ async function googleSignIn() {
           res.end('Not found');
         }
       } catch (err) {
-        console.error('OAuth callback error:', err);
         res.writeHead(500);
         res.end('Internal error');
         server.close();
@@ -660,9 +485,6 @@ async function googleSignIn() {
     });
 
     server.listen(GOOGLE_REDIRECT_PORT, '127.0.0.1', () => {
-      console.log(`OAuth callback server listening on port ${GOOGLE_REDIRECT_PORT}`);
-
-      // Build the Google OAuth URL
       const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
       authUrl.searchParams.set('redirect_uri', `http://localhost:${GOOGLE_REDIRECT_PORT}/callback`);
@@ -671,42 +493,24 @@ async function googleSignIn() {
       authUrl.searchParams.set('access_type', 'offline');
       authUrl.searchParams.set('prompt', 'select_account');
 
-      // Open browser window for Google sign-in
       const authWindow = new BrowserWindow({
         width: 500,
         height: 700,
         show: true,
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true
-        }
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
       });
-
       authWindow.loadURL(authUrl.toString());
-
-      // Handle window close before completion
       authWindow.on('closed', () => {
-        // Give some time for the callback to complete
-        setTimeout(() => {
-          try {
-            server.close();
-          } catch (e) {
-            // Server might already be closed
-          }
-        }, 1000);
+        setTimeout(() => { try { server.close(); } catch (_) {} }, 1000);
       });
     });
 
     server.on('error', (err) => {
-      console.error('OAuth server error:', err);
       resolve({ success: false, error: `Could not start OAuth server: ${err.message}` });
     });
 
-    // Timeout after 5 minutes
     setTimeout(() => {
-      try {
-        server.close();
-      } catch (e) {}
+      try { server.close(); } catch (_) {}
       resolve({ success: false, error: 'Sign-in timed out' });
     }, 300000);
   });
@@ -717,113 +521,107 @@ async function googleSignIn() {
 // ==================================
 
 function setupIPC() {
-  // Authentication - Google Sign-In
+  // Authentication
   ipcMain.handle('google-sign-in', async () => {
-    console.log('🔐 Google Sign-In initiated');
-    const result = await googleSignIn();
-    console.log('✅ Google Sign-In result:', result.success ? 'Success' : 'Failed');
-    return result;
+    return await googleSignIn();
   });
 
-  // Legacy email/password auth (kept for compatibility)
-  ipcMain.handle('register', async (event, { email, password, name }) => {
-    console.log('📧 Registration attempt:', email);
-    const result = await register(email, password, name);
-    console.log('✅ Registration result:', result.success ? 'Success' : 'Failed');
-    return result;
+  ipcMain.handle('register', async (_event, { email, password, name }) => {
+    return await register(email, password, name);
   });
 
-  ipcMain.handle('login', async (event, { email, password }) => {
-    console.log('📧 Login attempt:', email);
-    const result = await login(email, password);
-    console.log('✅ Login result:', result.success ? 'Success' : 'Failed');
-    return result;
+  ipcMain.handle('login', async (_event, { email, password }) => {
+    return await login(email, password);
   });
 
   ipcMain.handle('logout', () => {
     authToken = null;
     store.delete('authToken');
     stopBrowserMonitoring();
-    if (sessionPollInterval) {
-      clearInterval(sessionPollInterval);
-      sessionPollInterval = null;
+    if (configPollInterval) {
+      clearInterval(configPollInterval);
+      configPollInterval = null;
     }
-    currentSession = null;
+    currentConfig = null;
+    updateTrayMenu();
     return { success: true };
   });
 
-  // Session management
-  ipcMain.handle('start-session', async (event, { targetDevices, blockedWebsites, blockedPackages, blockedKeywords }) => {
-    return await startSession(targetDevices, blockedWebsites, blockedPackages, blockedKeywords);
-  });
-
-  ipcMain.handle('stop-session', async () => {
-    return await stopSession();
-  });
-
-  ipcMain.handle('get-current-session', () => {
-    return currentSession;
-  });
-
-  // Device management
-  ipcMain.handle('get-devices', async () => {
-    try {
-      const response = await apiRequest('/devices');
-      return response;
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Configuration
+  // Config management
   ipcMain.handle('get-config', async () => {
     try {
-      const response = await apiRequest('/config');
-      return response;
+      return await apiRequest('/config');
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  ipcMain.handle('update-config', async (event, config) => {
+  ipcMain.handle('update-config', async (_event, config) => {
     try {
       const response = await apiRequest('/config', {
         method: 'POST',
         body: JSON.stringify(config)
       });
+      await pollConfig(); // Immediately refresh local config
       return response;
     } catch (error) {
       return { success: false, error: error.message };
     }
   });
 
-  // Check auth status - verify token is valid with server
-  ipcMain.handle('is-authenticated', async () => {
-    if (!authToken) {
-      return false;
+  // Pending changes (24-hour delay for constraint relaxation)
+  ipcMain.handle('get-pending-changes', async () => {
+    try {
+      return await apiRequest('/config/pending');
+    } catch (error) {
+      return { success: false, error: error.message };
     }
+  });
 
+  ipcMain.handle('add-pending-change', async (_event, { type, value }) => {
+    try {
+      return await apiRequest('/config/pending', {
+        method: 'POST',
+        body: JSON.stringify({ type, value })
+      });
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('cancel-pending-change', async (_event, { changeId }) => {
+    try {
+      return await apiRequest(`/config/pending/${changeId}`, { method: 'DELETE' });
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Device management
+  ipcMain.handle('get-devices', async () => {
+    try {
+      return await apiRequest('/devices');
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Auth status
+  ipcMain.handle('is-authenticated', async () => {
+    if (!authToken) return false;
     try {
       const response = await apiRequest('/auth/me');
-      if (response.success) {
-        return true;
-      } else {
-        authToken = null;
-        store.delete('authToken');
-        return false;
-      }
-    } catch (error) {
-      console.error('Auth check failed:', error);
+      if (response.success) return true;
+      authToken = null;
+      store.delete('authToken');
+      return false;
+    } catch (_) {
       return false;
     }
   });
 
-  // Get this device's ID
-  ipcMain.handle('get-device-id', () => {
-    return deviceId;
-  });
+  ipcMain.handle('get-device-id', () => deviceId);
 
-  // Get current user info
   ipcMain.handle('get-user-info', async () => {
     try {
       return await apiRequest('/auth/me');
@@ -831,4 +629,7 @@ function setupIPC() {
       return { success: false, error: error.message };
     }
   });
+
+  // Current blocking config (replaces get-current-session)
+  ipcMain.handle('get-current-config', () => currentConfig);
 }

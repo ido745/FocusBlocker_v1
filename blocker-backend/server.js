@@ -182,10 +182,11 @@ app.post('/auth/google', async (req, res) => {
         },
         whitelists: {
           websites: [],
-          packages: ['com.focusapp.blocker', 'com.android.settings']
+          packages: ['com.focusapp.blocker']
         },
         pendingChanges: [],
-        deletionProtectionEnabled: false
+        deletionProtectionEnabled: false,
+        motivation: { videos: [], channels: [], duration: 10 }
       };
       db.users[user.id] = user;
       saveData();
@@ -197,6 +198,7 @@ app.post('/auth/google', async (req, res) => {
       // Ensure new fields exist for existing users
       if (!user.pendingChanges) user.pendingChanges = [];
       if (user.deletionProtectionEnabled === undefined) user.deletionProtectionEnabled = false;
+      if (!user.motivation) user.motivation = { videos: [], channels: [], duration: 10 };
       saveData();
       console.log(`User logged in via Google: ${email}`);
     }
@@ -385,8 +387,78 @@ app.get('/config', authenticate, (req, res) => {
     success: true,
     blocklists: user.blocklists || { websites: [], packages: [], keywords: [] },
     whitelists: user.whitelists || { websites: [], packages: [] },
-    deletionProtectionEnabled: user.deletionProtectionEnabled || false
+    deletionProtectionEnabled: user.deletionProtectionEnabled || false,
+    motivation: user.motivation || { videos: [], channels: [], duration: 10 }
   });
+});
+
+// ==================================
+// MOTIVATION MANAGEMENT
+// ==================================
+
+function ensureMotivation(user) {
+  if (!user.motivation) user.motivation = { videos: [], channels: [], duration: 10 };
+  if (!user.motivation.videos) user.motivation.videos = [];
+  if (!user.motivation.channels) user.motivation.channels = [];
+  if (user.motivation.duration === undefined) user.motivation.duration = 10;
+}
+
+app.post('/motivation/videos', authenticate, (req, res) => {
+  const user = db.users[req.user.id];
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  const { url, label } = req.body;
+  if (!url) return res.status(400).json({ success: false, error: 'url required' });
+  ensureMotivation(user);
+  user.motivation.videos.push({ url, label: label || null });
+  saveData();
+  res.json({ success: true, motivation: user.motivation });
+});
+
+app.delete('/motivation/videos/:index', authenticate, (req, res) => {
+  const user = db.users[req.user.id];
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  ensureMotivation(user);
+  const idx = parseInt(req.params.index, 10);
+  if (isNaN(idx) || idx < 0 || idx >= user.motivation.videos.length)
+    return res.status(400).json({ success: false, error: 'Invalid index' });
+  user.motivation.videos.splice(idx, 1);
+  saveData();
+  res.json({ success: true, motivation: user.motivation });
+});
+
+app.post('/motivation/channels', authenticate, (req, res) => {
+  const user = db.users[req.user.id];
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  const { url, label } = req.body;
+  if (!url) return res.status(400).json({ success: false, error: 'url required' });
+  ensureMotivation(user);
+  user.motivation.channels.push({ url, label: label || null });
+  saveData();
+  res.json({ success: true, motivation: user.motivation });
+});
+
+app.delete('/motivation/channels/:index', authenticate, (req, res) => {
+  const user = db.users[req.user.id];
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  ensureMotivation(user);
+  const idx = parseInt(req.params.index, 10);
+  if (isNaN(idx) || idx < 0 || idx >= user.motivation.channels.length)
+    return res.status(400).json({ success: false, error: 'Invalid index' });
+  user.motivation.channels.splice(idx, 1);
+  saveData();
+  res.json({ success: true, motivation: user.motivation });
+});
+
+app.put('/motivation/duration', authenticate, (req, res) => {
+  const user = db.users[req.user.id];
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  const { duration } = req.body;
+  if (typeof duration !== 'number' || duration < 0 || duration > 300)
+    return res.status(400).json({ success: false, error: 'duration must be 0-300 seconds' });
+  ensureMotivation(user);
+  user.motivation.duration = duration;
+  saveData();
+  res.json({ success: true, motivation: user.motivation });
 });
 
 app.post('/config', authenticate, (req, res) => {
@@ -408,7 +480,7 @@ app.post('/config', authenticate, (req, res) => {
   if (whitelistedWebsites !== undefined) user.whitelists.websites = whitelistedWebsites;
   if (whitelistedPackages !== undefined) {
     const ensuredWhitelist = new Set(whitelistedPackages);
-    ensuredWhitelist.add('com.focusapp.blocker');
+    ensuredWhitelist.add('com.focusapp.blocker'); // Always keep our own app whitelisted
     user.whitelists.packages = Array.from(ensuredWhitelist);
   }
   // Enable deletion protection immediately (tightening constraint)

@@ -10,11 +10,17 @@ import com.focusapp.blocker.data.AuthManager
 import com.focusapp.blocker.data.AuthenticatedRepository
 import com.focusapp.blocker.data.Blocklists
 import com.focusapp.blocker.data.Device
+import com.focusapp.blocker.data.MotivationConfig
+import com.focusapp.blocker.data.MotivationItem
 import com.focusapp.blocker.data.PendingChange
 import com.focusapp.blocker.data.PreferencesManager
 import com.focusapp.blocker.data.Session
 import com.focusapp.blocker.data.Whitelists
 import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
+import com.focusapp.blocker.service.BlockingAccessibilityService
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +48,7 @@ data class AppUiState(
     val whitelistedWebsites: Set<String> = setOf(),
     val pendingChanges: List<PendingChange> = emptyList(),
     val deletionProtectionEnabled: Boolean = false,
+    val motivation: MotivationConfig = MotivationConfig(),
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null
@@ -59,9 +66,31 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(AppUiState())
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
+    /** Emits a video URL whenever the accessibility guard fires and we should auto-play motivation. */
+    private val _motivationAutoPlay = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val motivationAutoPlay: SharedFlow<String> = _motivationAutoPlay.asSharedFlow()
+
     init {
         loadPreferences()
+        loadCachedConfig()
         checkAuthStatus()
+    }
+
+    private fun loadCachedConfig() {
+        viewModelScope.launch {
+            val cached = preferencesManager.loadCachedConfig()
+            // Only apply cache if it contains actual data (not the empty defaults)
+            if (cached.blockedPackages.isNotEmpty() || cached.whitelistedPackages.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(
+                    blockedPackages = cached.blockedPackages,
+                    blockedKeywords = cached.blockedKeywords,
+                    blockedWebsites = cached.blockedWebsites,
+                    whitelistedPackages = cached.whitelistedPackages,
+                    whitelistedWebsites = cached.whitelistedWebsites,
+                    deletionProtectionEnabled = cached.deletionProtection
+                )
+            }
+        }
     }
 
     private fun loadPreferences() {
@@ -177,17 +206,36 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fetchConfig() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            repository?.getConfig()?.onSuccess { (blocklists, whitelists, deletionProtection) ->
+            // Don't clear errorMessage here — it may have been set by a concurrent operation
+            // (e.g. addMotivationVideo) and we don't want to swallow it.
+            _uiState.value = _uiState.value.copy(isLoading = true)
+            repository?.getConfig()?.onSuccess { config ->
+                val blocked = config.blocklists.packages.orEmpty().toSet()
+                val keywords = config.blocklists.keywords.orEmpty().toSet()
+                val websites = config.blocklists.websites.orEmpty().toSet()
+                val whitelistPkgs = config.whitelists.packages.orEmpty().toSet()
+                val whitelistSites = config.whitelists.websites.orEmpty().toSet()
                 _uiState.value = _uiState.value.copy(
-                    blockedPackages = blocklists.packages.orEmpty().toSet(),
-                    blockedKeywords = blocklists.keywords.orEmpty().toSet(),
-                    blockedWebsites = blocklists.websites.orEmpty().toSet(),
-                    whitelistedPackages = whitelists.packages.orEmpty().toSet(),
-                    whitelistedWebsites = whitelists.websites.orEmpty().toSet(),
-                    deletionProtectionEnabled = deletionProtection,
+                    blockedPackages = blocked,
+                    blockedKeywords = keywords,
+                    blockedWebsites = websites,
+                    whitelistedPackages = whitelistPkgs,
+                    whitelistedWebsites = whitelistSites,
+                    deletionProtectionEnabled = config.deletionProtection,
+                    motivation = config.motivation,
                     isLoading = false
                 )
+                // Sync motivation to accessibility service companion
+                BlockingAccessibilityService.motivationVideos = config.motivation.videos.map { it.url }
+                BlockingAccessibilityService.motivationChannels = config.motivation.channels.map { it.url }
+                BlockingAccessibilityService.motivationDuration = config.motivation.duration
+                // Persist to local cache so the app survives a server cold-start (502)
+                preferencesManager.saveBlockedPackages(blocked)
+                preferencesManager.saveBlockedKeywords(keywords)
+                preferencesManager.saveBlockedWebsites(websites)
+                preferencesManager.saveWhitelistedPackages(whitelistPkgs)
+                preferencesManager.saveWhitelistedWebsites(whitelistSites)
+                preferencesManager.saveDeletionProtection(config.deletionProtection)
             }?.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -390,5 +438,80 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun clearMessages() {
         _uiState.value = _uiState.value.copy(errorMessage = null, successMessage = null)
         _authState.value = _authState.value.copy(errorMessage = null)
+    }
+
+    // ================== Motivation ==================
+
+    fun addMotivationVideo(url: String, label: String?) {
+        viewModelScope.launch {
+            repository?.addMotivationVideo(url, label)?.onSuccess { motivation ->
+                _uiState.value = _uiState.value.copy(motivation = motivation, successMessage = "Video added")
+                syncMotivationToService(motivation)
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to add video: ${error.message}")
+            }
+        }
+    }
+
+    fun removeMotivationVideo(index: Int) {
+        viewModelScope.launch {
+            repository?.removeMotivationVideo(index)?.onSuccess { motivation ->
+                _uiState.value = _uiState.value.copy(motivation = motivation)
+                syncMotivationToService(motivation)
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to remove video: ${error.message}")
+            }
+        }
+    }
+
+    fun addMotivationChannel(url: String, label: String?) {
+        viewModelScope.launch {
+            repository?.addMotivationChannel(url, label)?.onSuccess { motivation ->
+                _uiState.value = _uiState.value.copy(motivation = motivation, successMessage = "Channel added")
+                syncMotivationToService(motivation)
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to add channel: ${error.message}")
+            }
+        }
+    }
+
+    fun removeMotivationChannel(index: Int) {
+        viewModelScope.launch {
+            repository?.removeMotivationChannel(index)?.onSuccess { motivation ->
+                _uiState.value = _uiState.value.copy(motivation = motivation)
+                syncMotivationToService(motivation)
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to remove channel: ${error.message}")
+            }
+        }
+    }
+
+    fun updateMotivationDuration(seconds: Int) {
+        viewModelScope.launch {
+            repository?.updateMotivationDuration(seconds)?.onSuccess { motivation ->
+                _uiState.value = _uiState.value.copy(motivation = motivation)
+                syncMotivationToService(motivation)
+            }?.onFailure { error ->
+                _uiState.value = _uiState.value.copy(errorMessage = "Failed to update duration: ${error.message}")
+            }
+        }
+    }
+
+    private fun syncMotivationToService(motivation: MotivationConfig) {
+        BlockingAccessibilityService.motivationVideos = motivation.videos.map { it.url }
+        BlockingAccessibilityService.motivationChannels = motivation.channels.map { it.url }
+        BlockingAccessibilityService.motivationDuration = motivation.duration
+    }
+
+    /**
+     * Picks a random video from videos list (or channels list as fallback) and emits it
+     * to [motivationAutoPlay]. Called when the accessibility guard fires.
+     */
+    fun triggerMotivationAutoPlay() {
+        val motivation = _uiState.value.motivation
+        val allItems = motivation.videos + motivation.channels
+        if (allItems.isEmpty()) return
+        val item = allItems.random()
+        _motivationAutoPlay.tryEmit(item.url)
     }
 }

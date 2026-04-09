@@ -5,7 +5,10 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -50,11 +54,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.focusapp.blocker.data.PendingChange
 import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
+import com.focusapp.blocker.service.BlockingAccessibilityService
 import com.focusapp.blocker.service.FocusBlockerForegroundService
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
 import com.focusapp.blocker.ui.AuthViewModel
 import com.focusapp.blocker.ui.LoginScreen
+import com.focusapp.blocker.ui.MotivationPage
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -75,6 +81,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var credentialManager: CredentialManager
     private var authViewModel: AuthViewModel? = null
 
+    // Holds a video URL delivered from the accessibility guard via intent
+    private val pendingMotivationUrl = mutableStateOf<String?>(null)
+
     // Launcher to handle device admin activation result
     private val adminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -92,6 +101,9 @@ class MainActivity : ComponentActivity() {
         // Start foreground service to keep the process alive in the background
         FocusBlockerForegroundService.startService(this)
 
+        // Handle motivation auto-play from guard trigger
+        handleMotivationIntent(intent)
+
         setContent {
             MaterialTheme {
                 val viewModel: AuthViewModel = viewModel()
@@ -105,8 +117,19 @@ class MainActivity : ComponentActivity() {
                     if (authState.isAuthenticated) {
                         MainScreen(
                             viewModel = viewModel,
+                            pendingMotivationUrl = pendingMotivationUrl.value,
+                            onMotivationUrlConsumed = { pendingMotivationUrl.value = null },
                             onOpenAccessibilitySettings = { openAccessibilitySettings() },
                             isServiceEnabled = { isAccessibilityServiceEnabled() },
+                            isBatteryOptimizationIgnored = { isBatteryOptimizationIgnored() },
+                            onRequestBatteryExclusion = { requestBatteryOptimizationExclusion() },
+                            canDrawOverlays = { canDrawOverlays() },
+                            onOpenOverlaySettings = { openOverlaySettings() },
+                            isMiui = { isMiui() },
+                            isMiuiAutostartEnabled = { isMiuiAutostartEnabled() },
+                            isMiuiBackgroundPopupEnabled = { isMiuiBackgroundPopupEnabled() },
+                            onOpenMiuiAutostartSettings = { openMiuiAutostartSettings() },
+                            onOpenMiuiOverlaySettings = { openMiuiOverlaySettings() },
                             onRequestDeviceAdmin = { requestDeviceAdmin() }
                         )
                     } else {
@@ -117,6 +140,20 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleMotivationIntent(intent)
+    }
+
+    private fun handleMotivationIntent(intent: Intent?) {
+        if (intent?.action == FocusBlockerForegroundService.ACTION_LAUNCH_MOTIVATION) {
+            val url = intent.getStringExtra(FocusBlockerForegroundService.EXTRA_VIDEO_URL)
+            if (!url.isNullOrBlank()) {
+                pendingMotivationUrl.value = url
             }
         }
     }
@@ -162,16 +199,130 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openAccessibilitySettings() {
+        BlockingAccessibilityService.openedViaSettingsIconAt = System.currentTimeMillis()
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = "${packageName}/.service.BlockingAccessibilityService"
+        // Android stores the fully qualified name: "com.focusapp.blocker/com.focusapp.blocker.service.BlockingAccessibilityService"
+        val expected = "$packageName/${packageName}.service.BlockingAccessibilityService"
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: ""
-        return enabledServices.contains(expectedComponentName)
+        return enabledServices.split(":").any { it.equals(expected, ignoreCase = true) }
+    }
+
+    fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(this)
+
+    fun openOverlaySettings() {
+        BlockingAccessibilityService.openedFromApp = true
+        startActivity(Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName")
+        ))
+    }
+
+    fun isMiui(): Boolean {
+        return try {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val method = clazz.getMethod("get", String::class.java)
+            val version = method.invoke(null, "ro.miui.ui.version.name") as? String
+            version != null && version.isNotEmpty()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun isMiuiAutostartEnabled(): Boolean {
+        return try {
+            val ops = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+            val method = ops.javaClass.getMethod(
+                "checkOpNoThrow", Int::class.java, Int::class.java, String::class.java
+            )
+            // Op 10008 = MIUI autostart permission
+            val result = method.invoke(ops, 10008, android.os.Process.myUid(), packageName) as Int
+            result != android.app.AppOpsManager.MODE_IGNORED
+        } catch (e: Exception) {
+            true // Assume granted if we can't check
+        }
+    }
+
+    fun isMiuiBackgroundPopupEnabled(): Boolean {
+        return try {
+            val ops = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+            val method = ops.javaClass.getMethod(
+                "checkOpNoThrow", Int::class.java, Int::class.java, String::class.java
+            )
+            // Op 10021 = "open new windows while running in the background"
+            val result = method.invoke(ops, 10021, android.os.Process.myUid(), packageName) as Int
+            result != android.app.AppOpsManager.MODE_IGNORED
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    fun openMiuiAutostartSettings() {
+        BlockingAccessibilityService.openedFromApp = true
+        try {
+            val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                setClassName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                )
+                putExtra("extra_pkgname", packageName)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            // Fallback: open general MIUI app permissions page
+            try {
+                val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                    setClassName("com.miui.securitycenter",
+                        "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                    putExtra("extra_pkgname", packageName)
+                }
+                startActivity(intent)
+            } catch (e2: Exception) {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            }
+        }
+    }
+
+    fun openMiuiOverlaySettings() {
+        BlockingAccessibilityService.openedFromApp = true
+        // Opens MIUI's "Other permissions" page (PermissionsEditorActivity) where the user
+        // can toggle "Display pop-up windows while running in background"
+        try {
+            val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                setClassName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.PermissionsEditorActivity"
+                )
+                putExtra("extra_pkgname", packageName)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            })
+        }
+    }
+
+    fun isBatteryOptimizationIgnored(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    fun requestBatteryOptimizationExclusion() {
+        if (!isBatteryOptimizationIgnored()) {
+            BlockingAccessibilityService.openedFromApp = true
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+        }
     }
 
     /** Launches the system dialog to activate device admin (deletion protection). */
@@ -196,26 +347,55 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     viewModel: AuthViewModel,
+    pendingMotivationUrl: String?,
+    onMotivationUrlConsumed: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     isServiceEnabled: () -> Boolean,
+    isBatteryOptimizationIgnored: () -> Boolean,
+    onRequestBatteryExclusion: () -> Unit,
+    canDrawOverlays: () -> Boolean,
+    onOpenOverlaySettings: () -> Unit,
+    isMiui: () -> Boolean,
+    isMiuiAutostartEnabled: () -> Boolean,
+    isMiuiBackgroundPopupEnabled: () -> Boolean,
+    onOpenMiuiAutostartSettings: () -> Unit,
+    onOpenMiuiOverlaySettings: () -> Unit,
     onRequestDeviceAdmin: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val authState by viewModel.authState.collectAsState()
     var serviceEnabled by remember { mutableStateOf(false) }
+    var batteryOptIgnored by remember { mutableStateOf(true) }
+    var overlayGranted by remember { mutableStateOf(true) }
+    var miuiDevice by remember { mutableStateOf(false) }
+    var miuiAutostartGranted by remember { mutableStateOf(true) }
+    var miuiBackgroundPopupGranted by remember { mutableStateOf(true) }
     var selectedTab by remember { mutableStateOf(0) }
-    val pagerState = rememberPagerState(pageCount = { 3 })
+    val pagerState = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(pagerState.currentPage) {
         selectedTab = pagerState.currentPage
     }
 
-    // Check service status periodically
+    // When guard fires and sends a motivation URL, jump to Motivation tab
+    LaunchedEffect(pendingMotivationUrl) {
+        if (!pendingMotivationUrl.isNullOrBlank()) {
+            selectedTab = 3
+            pagerState.animateScrollToPage(3)
+        }
+    }
+
+    // Check service + permission statuses periodically
     LaunchedEffect(Unit) {
         while (true) {
             serviceEnabled = isServiceEnabled()
-            delay(500)
+            batteryOptIgnored = isBatteryOptimizationIgnored()
+            overlayGranted = canDrawOverlays()
+            miuiDevice = isMiui()
+            miuiAutostartGranted = isMiuiAutostartEnabled()
+            miuiBackgroundPopupGranted = isMiuiBackgroundPopupEnabled()
+            delay(2000)
         }
     }
 
@@ -238,6 +418,7 @@ fun MainScreen(
                                 0 -> "Home"
                                 1 -> "Block List"
                                 2 -> "Whitelist"
+                                3 -> "Motivation"
                                 else -> "Focus Blocker"
                             }
                         )
@@ -282,6 +463,12 @@ fun MainScreen(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2; scope.launch { pagerState.animateScrollToPage(2) } }
                 )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                    label = { Text("Motivation") },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3; scope.launch { pagerState.animateScrollToPage(3) } }
+                )
             }
         }
     ) { padding ->
@@ -290,9 +477,15 @@ fun MainScreen(
             modifier = Modifier.fillMaxSize().padding(padding)
         ) { page ->
             when (page) {
-                0 -> HomePage(viewModel, uiState, serviceEnabled, onOpenAccessibilitySettings, onRequestDeviceAdmin)
+                0 -> HomePage(viewModel, uiState, serviceEnabled, batteryOptIgnored, overlayGranted, miuiDevice, miuiAutostartGranted, miuiBackgroundPopupGranted, onOpenAccessibilitySettings, onRequestBatteryExclusion, onOpenOverlaySettings, onOpenMiuiAutostartSettings, onOpenMiuiOverlaySettings, onRequestDeviceAdmin)
                 1 -> BlockPage(viewModel, uiState)
                 2 -> WhitelistPage(viewModel, uiState)
+                3 -> MotivationPage(
+                    viewModel = viewModel,
+                    uiState = uiState,
+                    autoPlayUrl = if (pagerState.currentPage == 3) pendingMotivationUrl else null,
+                    onAutoPlayConsumed = onMotivationUrlConsumed
+                )
             }
         }
 
@@ -326,7 +519,16 @@ fun HomePage(
     viewModel: AuthViewModel,
     uiState: com.focusapp.blocker.ui.AppUiState,
     serviceEnabled: Boolean,
+    batteryOptIgnored: Boolean,
+    overlayGranted: Boolean,
+    miuiDevice: Boolean,
+    miuiAutostartGranted: Boolean,
+    miuiBackgroundPopupGranted: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
+    onRequestBatteryExclusion: () -> Unit,
+    onOpenOverlaySettings: () -> Unit,
+    onOpenMiuiAutostartSettings: () -> Unit,
+    onOpenMiuiOverlaySettings: () -> Unit,
     onRequestDeviceAdmin: () -> Unit
 ) {
     val context = LocalContext.current
@@ -335,15 +537,42 @@ fun HomePage(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Always-on status
-        item {
-            AlwaysOnStatusCard(serviceEnabled)
-        }
-
-        // Enable accessibility service warning
+        // Only show warning cards when something needs attention
         if (!serviceEnabled) {
             item {
                 EnablePermissionsCard(onOpenSettings = onOpenAccessibilitySettings)
+            }
+        }
+
+        if (!batteryOptIgnored) {
+            item {
+                BatteryOptimizationCard(onRequestExclusion = onRequestBatteryExclusion)
+            }
+        }
+
+        // On MIUI: show overlay card only if not granted AND not the MIUI device
+        // (on MIUI the dedicated MiuiOverlayCard handles this below)
+        if (!overlayGranted && !miuiDevice) {
+            item {
+                OverlayPermissionCard(onRequest = onOpenOverlaySettings)
+            }
+        }
+
+        // MIUI-specific: Autostart card (disappears once granted)
+        if (miuiDevice && !miuiAutostartGranted) {
+            item {
+                MiuiAutostartCard(onOpenSettings = onOpenMiuiAutostartSettings)
+            }
+        }
+
+        // MIUI-specific: Display pop-up windows card (disappears once overlay is granted)
+        if (miuiDevice && (!overlayGranted || !miuiBackgroundPopupGranted)) {
+            item {
+                MiuiOverlayCard(
+                    overlayGranted = overlayGranted,
+                    backgroundPopupGranted = miuiBackgroundPopupGranted,
+                    onOpenSettings = onOpenMiuiOverlaySettings
+                )
             }
         }
 
@@ -582,37 +811,6 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
 // ==================================
 
 @Composable
-fun AlwaysOnStatusCard(serviceEnabled: Boolean) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (serviceEnabled) Color(0xFF4CAF50) else Color(0xFFFF9800)
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = if (serviceEnabled) "🔒 FOCUS MODE ACTIVE" else "⚠️ Service Not Running",
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (serviceEnabled)
-                    "Blocking is always on — distraction-free by default"
-                else
-                    "Enable the accessibility service to start blocking",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.9f)
-            )
-        }
-    }
-}
-
-@Composable
 fun DeletionProtectionCard(
     isEnabled: Boolean,
     isPendingDisable: Boolean,
@@ -803,6 +1001,160 @@ fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
                 Icon(Icons.Default.Settings, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Open Accessibility Settings")
+            }
+        }
+    }
+}
+
+@Composable
+fun BatteryOptimizationCard(onRequestExclusion: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "⚡ Battery Optimization",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFE65100)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Android may stop blocking after 1-2 days unless you disable battery optimization for this app. Tap below to fix this.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF616161)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onRequestExclusion,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+            ) {
+                Text("Disable Battery Optimization")
+            }
+        }
+    }
+}
+
+@Composable
+fun OverlayPermissionCard(onRequest: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "🪟 Display Pop-up Permission",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFE65100)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Required so the app can reopen itself when you try to access protected settings. Tap below and enable \"Display pop-up windows\".",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF616161)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onRequest,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+            ) {
+                Text("Grant Permission")
+            }
+        }
+    }
+}
+
+@Composable
+fun MiuiAutostartCard(onOpenSettings: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "🚀 Enable Autostart (MIUI)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFE65100)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "MIUI/Poco restricts apps from starting automatically. Enable Autostart so the blocker can restart itself after a reboot and reopen when you access protected settings.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF616161)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+            ) {
+                Text("Enable Autostart")
+            }
+        }
+    }
+}
+
+@Composable
+fun MiuiOverlayCard(
+    overlayGranted: Boolean,
+    backgroundPopupGranted: Boolean,
+    onOpenSettings: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "🪟 Allow Pop-up Windows (MIUI)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFE65100)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "MIUI/Poco requires two permissions so the app can reopen itself when you access protected settings. Open \"Other permissions\" and enable both:",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF616161)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (backgroundPopupGranted) "✅" else "❌",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Open new windows while running in the background",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF616161)
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (overlayGranted) "✅" else "❌",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Display pop-up windows",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF616161)
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+            ) {
+                Text("Open Other Permissions")
             }
         }
     }

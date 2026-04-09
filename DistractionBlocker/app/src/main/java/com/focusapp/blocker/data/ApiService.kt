@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -131,11 +132,23 @@ data class Session(
     val deletionProtectionEnabled: Boolean? = null
 )
 
+data class MotivationItem(
+    val url: String,
+    val label: String? = null
+)
+
+data class MotivationConfig(
+    val videos: List<MotivationItem> = emptyList(),
+    val channels: List<MotivationItem> = emptyList(),
+    val duration: Int = 10
+)
+
 data class ConfigGetResponse(
     val success: Boolean,
     val blocklists: Blocklists,
     val whitelists: Whitelists,
-    val deletionProtectionEnabled: Boolean? = null
+    val deletionProtectionEnabled: Boolean? = null,
+    val motivation: MotivationConfig? = null
 )
 
 data class Blocklists(
@@ -202,6 +215,23 @@ data class CancelPendingChangeResponse(
     val message: String? = null
 )
 
+// ================== Motivation ==================
+
+data class AddMotivationItemRequest(
+    val url: String,
+    val label: String? = null
+)
+
+data class MotivationItemResponse(
+    val success: Boolean,
+    val motivation: MotivationConfig? = null,
+    val message: String? = null
+)
+
+data class UpdateMotivationDurationRequest(
+    val duration: Int
+)
+
 // ================== API Service Interface ==================
 
 interface ApiService {
@@ -263,4 +293,21 @@ interface ApiService {
 
     @DELETE("config/pending/{id}")
     suspend fun cancelPendingChange(@Path("id") changeId: String): CancelPendingChangeResponse
+
+    // ================== Motivation ==================
+
+    @POST("motivation/videos")
+    suspend fun addMotivationVideo(@Body request: AddMotivationItemRequest): MotivationItemResponse
+
+    @DELETE("motivation/videos/{index}")
+    suspend fun removeMotivationVideo(@Path("index") index: Int): MotivationItemResponse
+
+    @POST("motivation/channels")
+    suspend fun addMotivationChannel(@Body request: AddMotivationItemRequest): MotivationItemResponse
+
+    @DELETE("motivation/channels/{index}")
+    suspend fun removeMotivationChannel(@Path("index") index: Int): MotivationItemResponse
+
+    @PUT("motivation/duration")
+    suspend fun updateMotivationDuration(@Body request: UpdateMotivationDurationRequest): MotivationItemResponse
 }

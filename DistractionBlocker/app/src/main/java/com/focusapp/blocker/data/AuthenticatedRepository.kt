@@ -20,7 +20,10 @@ class AuthenticatedRepository(
 
     private val apiService: ApiService by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (com.focusapp.blocker.BuildConfig.DEBUG)
+                HttpLoggingInterceptor.Level.BODY
+            else
+                HttpLoggingInterceptor.Level.NONE
         }
 
         val authInterceptor = Interceptor { chain ->
@@ -40,24 +43,25 @@ class AuthenticatedRepository(
             var request = chain.request()
             var response: okhttp3.Response? = null
             var exception: java.io.IOException? = null
-            val maxRetries = 2
+            val maxRetries = 3
 
             for (attempt in 0..maxRetries) {
                 try {
                     response?.close()
                     response = chain.proceed(request)
-                    if (response.isSuccessful || response.code != 503) {
+                    // 502/503 = server waking up (Render free tier cold start), retry
+                    if (response.isSuccessful || (response.code != 502 && response.code != 503)) {
                         return@Interceptor response
                     }
                     if (attempt < maxRetries) {
-                        Log.d(TAG, "Server may be waking up (503), retrying in 3s... (attempt ${attempt + 1}/$maxRetries)")
-                        Thread.sleep(3000)
+                        Log.d(TAG, "Server waking up (${response.code}), retrying in 5s... (attempt ${attempt + 1}/$maxRetries)")
+                        Thread.sleep(5000)
                     }
                 } catch (e: java.io.IOException) {
                     exception = e
                     if (attempt < maxRetries) {
-                        Log.d(TAG, "Connection failed, retrying in 3s... (attempt ${attempt + 1}/$maxRetries)")
-                        Thread.sleep(3000)
+                        Log.d(TAG, "Connection failed, retrying in 5s... (attempt ${attempt + 1}/$maxRetries)")
+                        Thread.sleep(5000)
                     }
                 }
             }
@@ -203,15 +207,23 @@ class AuthenticatedRepository(
 
     // ================== Configuration ==================
 
-    suspend fun getConfig(): Result<Triple<Blocklists, Whitelists, Boolean>> {
+    data class FullConfig(
+        val blocklists: Blocklists,
+        val whitelists: Whitelists,
+        val deletionProtection: Boolean,
+        val motivation: MotivationConfig
+    )
+
+    suspend fun getConfig(): Result<FullConfig> {
         return try {
             val response = apiService.getConfig()
             if (response.success) {
                 Result.success(
-                    Triple(
-                        response.blocklists,
-                        response.whitelists,
-                        response.deletionProtectionEnabled ?: false
+                    FullConfig(
+                        blocklists = response.blocklists,
+                        whitelists = response.whitelists,
+                        deletionProtection = response.deletionProtectionEnabled ?: false,
+                        motivation = response.motivation ?: MotivationConfig()
                     )
                 )
             } else {
@@ -305,6 +317,78 @@ class AuthenticatedRepository(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error cancelling pending change", e)
+            Result.failure(e)
+        }
+    }
+
+    // ================== Motivation ==================
+
+    suspend fun addMotivationVideo(url: String, label: String?): Result<MotivationConfig> {
+        return try {
+            val response = apiService.addMotivationVideo(AddMotivationItemRequest(url, label))
+            if (response.success && response.motivation != null) {
+                Result.success(response.motivation)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to add video"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding motivation video", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removeMotivationVideo(index: Int): Result<MotivationConfig> {
+        return try {
+            val response = apiService.removeMotivationVideo(index)
+            if (response.success && response.motivation != null) {
+                Result.success(response.motivation)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to remove video"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing motivation video", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addMotivationChannel(url: String, label: String?): Result<MotivationConfig> {
+        return try {
+            val response = apiService.addMotivationChannel(AddMotivationItemRequest(url, label))
+            if (response.success && response.motivation != null) {
+                Result.success(response.motivation)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to add channel"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding motivation channel", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removeMotivationChannel(index: Int): Result<MotivationConfig> {
+        return try {
+            val response = apiService.removeMotivationChannel(index)
+            if (response.success && response.motivation != null) {
+                Result.success(response.motivation)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to remove channel"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing motivation channel", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateMotivationDuration(seconds: Int): Result<MotivationConfig> {
+        return try {
+            val response = apiService.updateMotivationDuration(UpdateMotivationDurationRequest(seconds))
+            if (response.success && response.motivation != null) {
+                Result.success(response.motivation)
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to update duration"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating motivation duration", e)
             Result.failure(e)
         }
     }

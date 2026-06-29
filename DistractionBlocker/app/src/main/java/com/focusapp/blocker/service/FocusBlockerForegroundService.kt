@@ -5,12 +5,20 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.focusapp.blocker.MainActivity
 import com.focusapp.blocker.R
+import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
 
 /**
  * A persistent foreground service that keeps the app process alive.
@@ -29,7 +37,7 @@ class FocusBlockerForegroundService : Service() {
 
         fun startService(context: Context) {
             val intent = Intent(context, FocusBlockerForegroundService::class.java)
-            context.startForegroundService(intent)
+            ContextCompat.startForegroundService(context, intent)
         }
 
         fun stopService(context: Context) {
@@ -37,36 +45,65 @@ class FocusBlockerForegroundService : Service() {
             context.stopService(intent)
         }
 
-        /**
-         * Asks the foreground service to launch MainActivity.
-         * MIUI/Poco allows startActivity from a foreground service (visible notification)
-         * but blocks it from plain background services and accessibility services.
-         */
         fun launchMainActivity(context: Context) {
             val intent = Intent(context, FocusBlockerForegroundService::class.java).apply {
                 action = ACTION_LAUNCH_MAIN
             }
-            context.startForegroundService(intent)
+            ContextCompat.startForegroundService(context, intent)
         }
 
-        /**
-         * Brings MainActivity to the front and delivers a video URL for auto-play.
-         * The MainActivity handles ACTION_LAUNCH_MOTIVATION in onNewIntent to open
-         * the motivation player.
-         */
         fun launchMotivation(context: Context, videoUrl: String) {
             val intent = Intent(context, FocusBlockerForegroundService::class.java).apply {
                 action = ACTION_LAUNCH_MOTIVATION
                 putExtra(EXTRA_VIDEO_URL, videoUrl)
             }
-            context.startForegroundService(intent)
+            ContextCompat.startForegroundService(context, intent)
+        }
+    }
+
+    private val watchdogHandler = Handler(Looper.getMainLooper())
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            restoreAccessibilityIfMissing()
+            watchdogHandler.postDelayed(this, 2_000)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (e: Exception) {
+            android.util.Log.e("FocusFGService", "startForeground failed: ${e.message}")
+            stopSelf()
+            return
+        }
+        watchdogHandler.postDelayed(watchdogRunnable, 2_000)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        watchdogHandler.removeCallbacks(watchdogRunnable)
+    }
+
+    private fun restoreAccessibilityIfMissing() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            if (!dpm.isDeviceOwnerApp(packageName)) return
+            val serviceFlat = ComponentName(packageName, "com.focusapp.blocker.service.BlockingAccessibilityService").flattenToString()
+            val current = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+            if (!current.contains(serviceFlat)) {
+                val admin = ComponentName(this, FocusDeviceAdminReceiver::class.java)
+                val services = current.split(":").filter { it.isNotBlank() }.toMutableSet()
+                services.add(serviceFlat)
+                dpm.setSecureSetting(admin, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, services.joinToString(":"))
+                dpm.setSecureSetting(admin, Settings.Secure.ACCESSIBILITY_ENABLED, "1")
+                android.util.Log.w("FocusFGService", "🔄 Watchdog restored accessibility service")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FocusFGService", "Watchdog restore failed: ${e.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -155,6 +192,7 @@ class FocusBlockerForegroundService : Service() {
     }
 
     private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Focus Blocker Service",

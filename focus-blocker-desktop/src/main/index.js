@@ -27,6 +27,7 @@ let currentConfig = null; // Always-on blocking config from server
 let authToken = null;
 let deviceId = null;
 let lastRedirectTime = 0;
+let isPollInProgress = false;
 
 // ==================================
 // APP LIFECYCLE
@@ -241,7 +242,13 @@ function isUrlBlocked(extractedUrl) {
     const bLower = blocked.toLowerCase();
     const bBase = bLower.split('.')[0];
     if (isTitleFallback) {
-      if (searchText.includes(bBase) && bBase.length > 3) return true;
+      if (bBase.length > 3 && searchText.includes(bBase)) return true;
+      // For short domains (e.g. "x.com", "fb.com"), require a whole-word match
+      // so "x" matches "Home / X" but not "example" or "next"
+      if (bBase.length <= 3) {
+        const wordRegex = new RegExp(`(?:^|[^a-z0-9])${bBase}(?:[^a-z0-9]|$)`, 'i');
+        if (wordRegex.test(searchText)) return true;
+      }
     } else {
       if (searchText.includes(bLower) || bLower.includes(searchText)) return true;
       if (searchText === bBase || bBase.includes(searchText)) return true;
@@ -288,6 +295,8 @@ function startConfigPolling() {
 }
 
 async function pollConfig() {
+  if (isPollInProgress) return; // Prevent overlapping polls (each has up to 6s of retries)
+  isPollInProgress = true;
   try {
     const response = await apiRequest(`/sessions/active?deviceId=${deviceId}`);
     if (response.success && response.session) {
@@ -301,6 +310,8 @@ async function pollConfig() {
     }
   } catch (error) {
     console.error('Config polling error (keeping current config):', error);
+  } finally {
+    isPollInProgress = false;
   }
 }
 
@@ -336,10 +347,18 @@ async function apiRequest(endpoint, options = {}, retries = 2) {
   };
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10s hard timeout
     try {
-      const response = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+      const response = await fetch(`${API_URL}${endpoint}`, {
+        ...options,
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
       return await response.json();
     } catch (error) {
+      clearTimeout(timeout);
       if (attempt < retries) {
         console.log(`⏳ Server may be waking up, retrying in 3s... (attempt ${attempt + 1}/${retries})`);
         await new Promise(resolve => setTimeout(resolve, 3000));

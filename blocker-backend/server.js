@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const fs = require('fs');
 const path = require('path');
+const ytdl = require('@distube/ytdl-core');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -461,6 +462,183 @@ app.put('/motivation/duration', authenticate, (req, res) => {
   res.json({ success: true, motivation: user.motivation });
 });
 
+// ==================================
+// CHANNEL → RANDOM VIDEO RESOLUTION
+// ==================================
+
+function httpGet(url, redirectsLeft = 5, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? require('https') : require('http');
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+      ...extraHeaders
+    };
+    lib.get(url, { headers }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+        const next = res.headers.location.startsWith('http')
+          ? res.headers.location
+          : new URL(res.headers.location, url).href;
+        res.resume();
+        return resolve(httpGet(next, redirectsLeft - 1, extraHeaders));
+      }
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+// ── YouTube ──────────────────────────────────────────────────
+
+async function resolveYoutubeChannelId(url) {
+  const directMatch = url.match(/youtube\.com\/channel\/([A-Za-z0-9_-]+)/);
+  if (directMatch) return directMatch[1];
+  try {
+    const html = await httpGet(url);
+    const m = html.match(/"channelId":"([A-Za-z0-9_-]+)"/);
+    if (m) return m[1];
+    const m2 = html.match(/youtube\.com\/channel\/([A-Za-z0-9_-]+)/);
+    if (m2) return m2[1];
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+async function getYoutubeChannelVideos(url) {
+  const channelId = await resolveYoutubeChannelId(url);
+  if (!channelId) return [];
+  const feedXml = await httpGet(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
+  return [...feedXml.matchAll(/<yt:videoId>([^<]+)<\/yt:videoId>/g)]
+    .map(m => `https://www.youtube.com/watch?v=${m[1]}`);
+}
+
+// ── Instagram ────────────────────────────────────────────────
+
+const NON_PROFILE_IG_PATHS = new Set(['p', 'reel', 'tv', 'stories', 'explore', 'accounts', 'direct', 'reels', 'about', 'blog', 'press', 'jobs', 'legal', 'privacy', 'security', 'help']);
+
+function extractInstagramUsername(url) {
+  const m = url.match(/instagram\.com\/([A-Za-z0-9._]+)/);
+  if (!m) return null;
+  return NON_PROFILE_IG_PATHS.has(m[1]) ? null : m[1];
+}
+
+async function getInstagramProfileVideos(url) {
+  const username = extractInstagramUsername(url);
+  if (!username) return [];
+
+  try {
+    // Instagram's internal profile API — works for public accounts with the app-id header
+    const body = await httpGet(
+      `https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+      5,
+      {
+        'x-ig-app-id': '936619743392459',
+        'x-asbd-id': '129477',
+        'Accept': '*/*',
+        'Referer': 'https://www.instagram.com/',
+        'Origin': 'https://www.instagram.com'
+      }
+    );
+    const data = JSON.parse(body);
+    const edges = data?.data?.user?.edge_owner_to_timeline_media?.edges ?? [];
+    const codes = edges
+      .filter(e => e.node.is_video || e.node.__typename === 'GraphVideo')
+      .map(e => `https://www.instagram.com/reel/${e.node.shortcode}/`);
+    if (codes.length) return codes;
+  } catch (e) {
+    console.log(`Instagram API failed for @${username}: ${e.message}`);
+  }
+
+  // Fallback: scrape the profile page HTML for reel/post shortcodes
+  try {
+    const html = await httpGet(`https://www.instagram.com/${username}/reels/`, 5, {
+      'Accept': 'text/html,application/xhtml+xml'
+    });
+    // shortcodes appear as "/reel/CODE/" or "/p/CODE/" in the HTML
+    const codes = [...new Set(
+      [...html.matchAll(/\/(reel|p)\/([A-Za-z0-9_-]{8,12})\//g)].map(m => m[2])
+    )].map(code => `https://www.instagram.com/reel/${code}/`);
+    if (codes.length) return codes;
+  } catch (e) {
+    console.log(`Instagram scrape failed for @${username}: ${e.message}`);
+  }
+
+  return [];
+}
+
+// ── TikTok ───────────────────────────────────────────────────
+
+function extractTikTokUsername(url) {
+  const m = url.match(/tiktok\.com\/@([A-Za-z0-9._]+)/);
+  return m ? m[1] : null;
+}
+
+async function getTikTokProfileVideos(url) {
+  const username = extractTikTokUsername(url);
+  if (!username) return [];
+
+  try {
+    const html = await httpGet(`https://www.tiktok.com/@${encodeURIComponent(username)}`, 5, {
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Encoding': 'identity'
+    });
+
+    // TikTok embeds all page data in a SIGI_STATE script tag
+    const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/);
+    if (sigiMatch) {
+      const data = JSON.parse(sigiMatch[1]);
+      const itemModule = data?.ItemModule ?? {};
+      const ids = Object.values(itemModule)
+        .map(item => item.id)
+        .filter(Boolean);
+      if (ids.length) {
+        return ids.map(id => `https://www.tiktok.com/@${username}/video/${id}`);
+      }
+    }
+
+    // Fallback: extract bare numeric video IDs from the raw HTML
+    const ids = [...new Set(
+      [...html.matchAll(/\/video\/(\d{15,20})/g)].map(m => m[1])
+    )];
+    if (ids.length) return ids.map(id => `https://www.tiktok.com/@${username}/video/${id}`);
+  } catch (e) {
+    console.log(`TikTok scrape failed for @${username}: ${e.message}`);
+  }
+
+  return [];
+}
+
+// ── Endpoint ─────────────────────────────────────────────────
+
+app.get('/channel/random-video', authenticate, async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ success: false, error: 'url required' });
+
+  try {
+    let videos = [];
+
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      videos = await getYoutubeChannelVideos(url);
+    } else if (url.includes('instagram.com')) {
+      videos = await getInstagramProfileVideos(url);
+    } else if (url.includes('tiktok.com')) {
+      videos = await getTikTokProfileVideos(url);
+    } else {
+      return res.status(400).json({ success: false, error: 'Unsupported platform' });
+    }
+
+    if (!videos.length) {
+      return res.status(404).json({ success: false, error: 'No videos found for this channel' });
+    }
+
+    const videoUrl = videos[Math.floor(Math.random() * videos.length)];
+    return res.json({ success: true, videoUrl });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.post('/config', authenticate, (req, res) => {
   const userId = req.user.id;
   const { blockedWebsites, blockedPackages, blockedKeywords, whitelistedWebsites, whitelistedPackages, deletionProtectionEnabled } = req.body;
@@ -607,6 +785,72 @@ app.delete('/config/pending/:id', authenticate, (req, res) => {
   console.log(`Pending change cancelled: ${changeId} for ${user.email}`);
 
   res.json({ success: true, message: 'Pending change cancelled' });
+});
+
+// ==================================
+// VIDEO DOWNLOAD URL RESOLUTION
+// ==================================
+
+async function resolveTikTokDownloadUrl(url) {
+  const html = await httpGet(url, 5, {
+    'Accept': 'text/html,application/xhtml+xml',
+    'Accept-Encoding': 'identity'
+  });
+
+  const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/);
+  if (sigiMatch) {
+    try {
+      const data = JSON.parse(sigiMatch[1]);
+      const item = Object.values(data?.ItemModule ?? {})[0];
+      const playAddr = item?.video?.playAddr;
+      if (playAddr) return playAddr.replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+    } catch (e) { /* ignore */ }
+  }
+
+  const match = html.match(/"playAddr"\s*:\s*"([^"]+)"/);
+  if (match) return match[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+
+  throw new Error('Could not extract TikTok video URL');
+}
+
+async function resolveInstagramDownloadUrl(url) {
+  const html = await httpGet(url, 5, { 'Accept': 'text/html,application/xhtml+xml' });
+  const match = html.match(/<meta[^>]+property="og:video"[^>]+content="([^"]+)"/)
+    || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:video"/);
+  if (match) return match[1].replace(/&amp;/g, '&');
+  throw new Error('Could not extract Instagram video URL');
+}
+
+app.get('/motivation/download-url', authenticate, async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ success: false, error: 'url required' });
+
+  try {
+    let downloadUrl;
+
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      const info = await ytdl.getInfo(url);
+      let format = ytdl.chooseFormat(info.formats, {
+        filter: f => f.hasVideo && f.hasAudio && f.container === 'mp4'
+      });
+      if (!format) {
+        format = ytdl.chooseFormat(info.formats, { filter: 'audioandvideo' });
+      }
+      if (!format) throw new Error('No downloadable format found for this video');
+      downloadUrl = format.url;
+    } else if (url.includes('tiktok.com')) {
+      downloadUrl = await resolveTikTokDownloadUrl(url);
+    } else if (url.includes('instagram.com')) {
+      downloadUrl = await resolveInstagramDownloadUrl(url);
+    } else {
+      return res.status(400).json({ success: false, error: 'Unsupported platform for download' });
+    }
+
+    res.json({ success: true, downloadUrl });
+  } catch (e) {
+    console.error('Download URL resolution error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // ==================================

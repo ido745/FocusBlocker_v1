@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -38,7 +38,19 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
-        <!-- Main Activity -->
+        <!-- Launcher entry point. Controlled at runtime by the "Hide App Icon" toggle. -->
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.DistractionBlocker">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Main Activity — started by the foreground service, notifications, and LauncherActivity. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -46,7 +58,6 @@
             android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
@@ -63,11 +74,16 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Foreground service to keep the process alive -->
+        <!-- Foreground service to keep the process alive.
+             specialUse has no time limit (dataSync is capped at 6h/day on Android 14+). -->
         <service
             android:name=".service.FocusBlockerForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the focus-blocking accessibility service alive in the background" />
+        </service>
 
         <!-- Boot receiver to auto-start on device reboot -->
         <receiver
@@ -79,6 +95,20 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </receiver>
+
+        <!-- Alarm receiver: applies pending changes when their 24-hour delay elapses -->
+        <receiver
+            android:name=".receiver.PendingChangesReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.focusapp.blocker.PENDING_CHANGE_APPLY" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Developer escape hatch — trigger with: adb shell am broadcast -n com.focusapp.blocker/.receiver.DebugUnlockReceiver -->
+        <receiver
+            android:name=".receiver.DebugUnlockReceiver"
+            android:exported="false" />
 
         <!-- Device Admin Receiver for deletion protection -->
         <receiver

@@ -1,13 +1,5 @@
 package com.focusapp.blocker.data
 
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
-
 // ================== Legacy data classes (kept for compatibility) ==================
 
 data class StatusResponse(
@@ -140,6 +132,8 @@ data class MotivationItem(
 data class MotivationConfig(
     val videos: List<MotivationItem> = emptyList(),
     val channels: List<MotivationItem> = emptyList(),
+    val galleryVideos: List<MotivationItem> = emptyList(),
+    val phrases: List<String> = emptyList(),
     val duration: Int = 10
 )
 
@@ -232,82 +226,15 @@ data class UpdateMotivationDurationRequest(
     val duration: Int
 )
 
-// ================== API Service Interface ==================
+data class RandomVideoResponse(
+    val success: Boolean,
+    val videoUrl: String? = null,
+    val error: String? = null
+)
 
-interface ApiService {
-    // ================== Legacy Endpoints (backward compatibility) ==================
-    @GET("status")
-    suspend fun getStatus(): StatusResponse
+data class DownloadUrlResponse(
+    val success: Boolean,
+    val downloadUrl: String? = null,
+    val error: String? = null
+)
 
-    @POST("toggle")
-    suspend fun toggleSession(): ToggleResponse
-
-    @POST("config")
-    suspend fun updateConfig(@Body config: ConfigRequest): ConfigResponse
-
-    // ================== Authentication ==================
-
-    @POST("auth/register")
-    suspend fun register(@Body request: RegisterRequest): AuthResponse
-
-    @POST("auth/login")
-    suspend fun login(@Body request: LoginRequest): AuthResponse
-
-    @POST("auth/google")
-    suspend fun googleAuth(@Body request: GoogleAuthRequest): AuthResponse
-
-    // ================== Device Management ==================
-
-    @POST("devices/register")
-    suspend fun registerDevice(@Body request: DeviceRegistrationRequest): DeviceRegistrationResponse
-
-    @GET("devices")
-    suspend fun getDevices(): DevicesResponse
-
-    // ================== Session (Always-On) ==================
-
-    @POST("sessions/start")
-    suspend fun startSession(@Body request: SessionStartRequest): SessionResponse
-
-    @POST("sessions/stop")
-    suspend fun stopSession(): SessionResponse
-
-    @GET("sessions/active")
-    suspend fun getActiveSession(@Query("deviceId") deviceId: String): SessionResponse
-
-    // ================== Configuration ==================
-
-    @GET("config")
-    suspend fun getConfig(): ConfigGetResponse
-
-    @POST("config")
-    suspend fun updateConfigAuth(@Body request: ConfigUpdateRequest): ConfigUpdateResponse
-
-    // ================== Pending Changes ==================
-
-    @GET("config/pending")
-    suspend fun getPendingChanges(): PendingChangesResponse
-
-    @POST("config/pending")
-    suspend fun addPendingChange(@Body request: AddPendingChangeRequest): AddPendingChangeResponse
-
-    @DELETE("config/pending/{id}")
-    suspend fun cancelPendingChange(@Path("id") changeId: String): CancelPendingChangeResponse
-
-    // ================== Motivation ==================
-
-    @POST("motivation/videos")
-    suspend fun addMotivationVideo(@Body request: AddMotivationItemRequest): MotivationItemResponse
-
-    @DELETE("motivation/videos/{index}")
-    suspend fun removeMotivationVideo(@Path("index") index: Int): MotivationItemResponse
-
-    @POST("motivation/channels")
-    suspend fun addMotivationChannel(@Body request: AddMotivationItemRequest): MotivationItemResponse
-
-    @DELETE("motivation/channels/{index}")
-    suspend fun removeMotivationChannel(@Path("index") index: Int): MotivationItemResponse
-
-    @PUT("motivation/duration")
-    suspend fun updateMotivationDuration(@Body request: UpdateMotivationDurationRequest): MotivationItemResponse
-}

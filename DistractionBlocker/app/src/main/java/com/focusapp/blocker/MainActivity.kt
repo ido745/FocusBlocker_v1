@@ -5,86 +5,160 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Brightness4
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.graphics.drawable.toBitmap
-import androidx.credentials.CredentialManager
-import androidx.credentials.CustomCredential
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.GetCredentialResponse
-import androidx.credentials.exceptions.GetCredentialException
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.focusapp.blocker.data.DonationManager
 import com.focusapp.blocker.data.PendingChange
 import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
 import com.focusapp.blocker.service.BlockingAccessibilityService
 import com.focusapp.blocker.service.FocusBlockerForegroundService
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
+import com.focusapp.blocker.ui.AppStrings
 import com.focusapp.blocker.ui.AuthViewModel
-import com.focusapp.blocker.ui.LoginScreen
+import com.focusapp.blocker.ui.EnglishStrings
+import com.focusapp.blocker.ui.HebrewStrings
+import com.focusapp.blocker.ui.LocalIsHebrew
+import com.focusapp.blocker.ui.LocalOnThemeChange
+import com.focusapp.blocker.ui.LocalOnToggleLanguage
+import com.focusapp.blocker.ui.LocalStrings
+import com.focusapp.blocker.ui.LocalThemeMode
 import com.focusapp.blocker.ui.MotivationPage
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
-import kotlinx.coroutines.delay
+import com.focusapp.blocker.ui.MotivationPlayerWithResolution
+import com.focusapp.blocker.ui.TermsScreen
+import com.focusapp.blocker.ui.TERMS_VERSION
+import com.focusapp.blocker.ui.formatChangeType
+import android.graphics.BitmapFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import java.util.Locale
+
+private val AppColorScheme = lightColorScheme(
+    primary          = Color(0xFF5C6BC0),
+    onPrimary        = Color.White,
+    primaryContainer = Color(0xFFE8EAF6),
+    onPrimaryContainer = Color(0xFF1A237E),
+    secondary        = Color(0xFF26A69A),
+    onSecondary      = Color.White,
+    secondaryContainer = Color(0xFFB2DFDB),
+    onSecondaryContainer = Color(0xFF004D40),
+    tertiary         = Color(0xFF7C4DFF),
+    surface          = Color(0xFFFFFFFF),
+    onSurface        = Color(0xFF1A1A2E),
+    surfaceVariant   = Color(0xFFF0F0F8),
+    background       = Color(0xFFE8E8F0),
+    onBackground     = Color(0xFF1A1A2E),
+    error            = Color(0xFFE53935),
+    onError          = Color.White
+)
+
+private val DarkColorScheme = darkColorScheme(
+    primary             = Color(0xFF7986CB),
+    onPrimary           = Color(0xFF1A1A2E),
+    primaryContainer    = Color(0xFF283593),
+    onPrimaryContainer  = Color(0xFFE8EAF6),
+    secondary           = Color(0xFF4DB6AC),
+    onSecondary         = Color(0xFF1A1A2E),
+    secondaryContainer  = Color(0xFF00695C),
+    onSecondaryContainer = Color(0xFFB2DFDB),
+    tertiary            = Color(0xFFB39DDB),
+    surface             = Color(0xFF1E1E2E),
+    onSurface           = Color(0xFFE8E8F0),
+    surfaceVariant      = Color(0xFF2A2A3E),
+    onSurfaceVariant    = Color(0xFFCACADA),
+    background          = Color(0xFF121218),
+    onBackground        = Color(0xFFE8E8F0),
+    outline             = Color(0xFF5A5A70),
+    outlineVariant      = Color(0xFF3A3A50),
+    error               = Color(0xFFEF9A9A),
+    onError             = Color(0xFF1A1A2E)
+)
+
+private const val CONTACT_FORM_URL =
+    "https://docs.google.com/forms/d/e/1FAIpQLSfGoROA5ZLNd-ZJbE854WRLdwyaBy_CPub8kNCkk8eG8N62WA/viewform?usp=publish-editor"
 
 class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        const val GOOGLE_CLIENT_ID = "42261799101-ibarq1tjou7rag3de5aifg0vg68771j8.apps.googleusercontent.com"
     }
 
-    private lateinit var credentialManager: CredentialManager
     private var authViewModel: AuthViewModel? = null
 
-    // Holds a video URL delivered from the accessibility guard via intent
     private val pendingMotivationUrl = mutableStateOf<String?>(null)
 
-    // Launcher to handle device admin activation result
     private val adminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -93,51 +167,95 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* granted or denied — notification silently absent if denied */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        credentialManager = CredentialManager.create(this)
+        val isDark = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        @Suppress("DEPRECATION")
+        window.statusBarColor = if (isDark) 0xFF121218.toInt() else 0xFFE8E8F0.toInt()
+        WindowCompat.getInsetsController(window, window.decorView)
+            .isAppearanceLightStatusBars = !isDark
 
-        // Start foreground service to keep the process alive in the background
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
         FocusBlockerForegroundService.startService(this)
 
-        // Handle motivation auto-play from guard trigger
         handleMotivationIntent(intent)
 
-        setContent {
-            MaterialTheme {
-                val viewModel: AuthViewModel = viewModel()
-                authViewModel = viewModel
-                val authState by viewModel.authState.collectAsState()
+        val langPrefs = getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+        val savedLang = langPrefs.getString("language", null)
+        val systemIsHebrew = Locale.getDefault().language.let { it == "iw" || it == "he" }
+        val initialHebrew = if (savedLang != null) savedLang == "he" else systemIsHebrew
+        val initialTheme = langPrefs.getString("theme", "system") ?: "system"
 
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    if (authState.isAuthenticated) {
-                        MainScreen(
-                            viewModel = viewModel,
-                            pendingMotivationUrl = pendingMotivationUrl.value,
-                            onMotivationUrlConsumed = { pendingMotivationUrl.value = null },
-                            onOpenAccessibilitySettings = { openAccessibilitySettings() },
-                            isServiceEnabled = { isAccessibilityServiceEnabled() },
-                            isBatteryOptimizationIgnored = { isBatteryOptimizationIgnored() },
-                            onRequestBatteryExclusion = { requestBatteryOptimizationExclusion() },
-                            canDrawOverlays = { canDrawOverlays() },
-                            onOpenOverlaySettings = { openOverlaySettings() },
-                            isMiui = { isMiui() },
-                            isMiuiAutostartEnabled = { isMiuiAutostartEnabled() },
-                            isMiuiBackgroundPopupEnabled = { isMiuiBackgroundPopupEnabled() },
-                            onOpenMiuiAutostartSettings = { openMiuiAutostartSettings() },
-                            onOpenMiuiOverlaySettings = { openMiuiOverlaySettings() },
-                            onRequestDeviceAdmin = { requestDeviceAdmin() }
-                        )
-                    } else {
-                        LoginScreen(
-                            onGoogleSignInClick = { signInWithGoogle() },
-                            isLoading = authState.isLoading,
-                            errorMessage = authState.errorMessage
-                        )
+        setContent {
+            var isHebrew by remember { mutableStateOf(initialHebrew) }
+            var themeMode by remember { mutableStateOf(initialTheme) }
+            val strings = if (isHebrew) HebrewStrings else EnglishStrings
+            val systemIsDark = isSystemInDarkTheme()
+            val isDark = when (themeMode) {
+                "light" -> false
+                "dark" -> true
+                else -> systemIsDark
+            }
+            val toggleLanguage: () -> Unit = {
+                isHebrew = !isHebrew
+                langPrefs.edit().putString("language", if (isHebrew) "he" else "en").apply()
+            }
+            val onThemeChange: (String) -> Unit = { mode ->
+                themeMode = mode
+                langPrefs.edit().putString("theme", mode).apply()
+            }
+
+            CompositionLocalProvider(
+                LocalStrings provides strings,
+                LocalIsHebrew provides isHebrew,
+                LocalOnToggleLanguage provides toggleLanguage,
+                LocalLayoutDirection provides if (isHebrew) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                LocalThemeMode provides themeMode,
+                LocalOnThemeChange provides onThemeChange
+            ) {
+                MaterialTheme(colorScheme = if (isDark) DarkColorScheme else AppColorScheme) {
+                    val viewModel: AuthViewModel = viewModel()
+                    authViewModel = viewModel
+                    val termsVersion by viewModel.termsAcceptedVersion.collectAsState(initial = -1)
+
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        when {
+                            termsVersion == -1 -> Box(Modifier.fillMaxSize())
+                            termsVersion < TERMS_VERSION -> TermsScreen(onAccepted = { viewModel.acceptTerms(TERMS_VERSION) })
+                            else -> MainScreen(
+                                viewModel = viewModel,
+                                pendingMotivationUrl = pendingMotivationUrl.value,
+                                onMotivationUrlConsumed = { pendingMotivationUrl.value = null },
+                                onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                                isServiceEnabled = { isAccessibilityServiceEnabled() },
+                                isBatteryOptimizationIgnored = { isBatteryOptimizationIgnored() },
+                                onRequestBatteryExclusion = { requestBatteryOptimizationExclusion() },
+                                canDrawOverlays = { canDrawOverlays() },
+                                onOpenOverlaySettings = { openOverlaySettings() },
+                                isMiui = { isMiui() },
+                                isMiuiAutostartEnabled = { isMiuiAutostartEnabled() },
+                                isMiuiBackgroundPopupEnabled = { isMiuiBackgroundPopupEnabled() },
+                                onOpenMiuiAutostartSettings = { openMiuiAutostartSettings() },
+                                onOpenMiuiOverlaySettings = { openMiuiOverlaySettings() },
+                                onRequestDeviceAdmin = { requestDeviceAdmin() },
+                            )
+                        }
                     }
                 }
             }
@@ -149,6 +267,28 @@ class MainActivity : ComponentActivity() {
         handleMotivationIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // If protection is still active but the player isn't showing (e.g. the activity was
+        // restarted after being swiped from recents), immediately re-display the motivation.
+        val activeUrl = BlockingAccessibilityService.lastMotivationUrl
+        if (activeUrl.isNotEmpty() && pendingMotivationUrl.value.isNullOrBlank()) {
+            pendingMotivationUrl.value = activeUrl
+        }
+    }
+
+    // Called when the user presses HOME or opens the recents screen.
+    // If motivation is active (triggered by protection), immediately bring ourselves back
+    // to the foreground so the user cannot swipe us away from recents.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (BlockingAccessibilityService.lastMotivationUrl.isNotEmpty()) {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            })
+        }
+    }
+
     private fun handleMotivationIntent(intent: Intent?) {
         if (intent?.action == FocusBlockerForegroundService.ACTION_LAUNCH_MOTIVATION) {
             val url = intent.getStringExtra(FocusBlockerForegroundService.EXTRA_VIDEO_URL)
@@ -158,53 +298,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun signInWithGoogle() {
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(GOOGLE_CLIENT_ID)
-            .setAutoSelectEnabled(true)
-            .build()
-
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
-            .build()
-
-        lifecycleScope.launch {
-            try {
-                val result = credentialManager.getCredential(
-                    request = request,
-                    context = this@MainActivity
-                )
-                handleSignIn(result)
-            } catch (e: GetCredentialException) {
-                Log.e(TAG, "Google sign-in failed", e)
-            }
-        }
-    }
-
-    private fun handleSignIn(result: GetCredentialResponse) {
-        val credential = result.credential
-        when (credential) {
-            is CustomCredential -> {
-                if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    try {
-                        val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                        authViewModel?.signInWithGoogle(googleIdTokenCredential.idToken)
-                    } catch (e: GoogleIdTokenParsingException) {
-                        Log.e(TAG, "Failed to parse Google ID token", e)
-                    }
-                }
-            }
-        }
-    }
-
     private fun openAccessibilitySettings() {
-        BlockingAccessibilityService.openedViaSettingsIconAt = System.currentTimeMillis()
+        BlockingAccessibilityService.openedFromApp = true
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        // Android stores the fully qualified name: "com.focusapp.blocker/com.focusapp.blocker.service.BlockingAccessibilityService"
         val expected = "$packageName/${packageName}.service.BlockingAccessibilityService"
         val enabledServices = Settings.Secure.getString(
             contentResolver,
@@ -240,11 +339,10 @@ class MainActivity : ComponentActivity() {
             val method = ops.javaClass.getMethod(
                 "checkOpNoThrow", Int::class.java, Int::class.java, String::class.java
             )
-            // Op 10008 = MIUI autostart permission
             val result = method.invoke(ops, 10008, android.os.Process.myUid(), packageName) as Int
             result != android.app.AppOpsManager.MODE_IGNORED
         } catch (e: Exception) {
-            true // Assume granted if we can't check
+            true
         }
     }
 
@@ -254,7 +352,6 @@ class MainActivity : ComponentActivity() {
             val method = ops.javaClass.getMethod(
                 "checkOpNoThrow", Int::class.java, Int::class.java, String::class.java
             )
-            // Op 10021 = "open new windows while running in the background"
             val result = method.invoke(ops, 10021, android.os.Process.myUid(), packageName) as Int
             result != android.app.AppOpsManager.MODE_IGNORED
         } catch (e: Exception) {
@@ -274,7 +371,6 @@ class MainActivity : ComponentActivity() {
             }
             startActivity(intent)
         } catch (e: Exception) {
-            // Fallback: open general MIUI app permissions page
             try {
                 val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
                     setClassName("com.miui.securitycenter",
@@ -292,8 +388,6 @@ class MainActivity : ComponentActivity() {
 
     fun openMiuiOverlaySettings() {
         BlockingAccessibilityService.openedFromApp = true
-        // Opens MIUI's "Other permissions" page (PermissionsEditorActivity) where the user
-        // can toggle "Display pop-up windows while running in background"
         try {
             val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
                 setClassName(
@@ -318,14 +412,34 @@ class MainActivity : ComponentActivity() {
     fun requestBatteryOptimizationExclusion() {
         if (!isBatteryOptimizationIgnored()) {
             BlockingAccessibilityService.openedFromApp = true
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
+            if (isMiui()) {
+                // MIUI ignores ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS and shows a
+                // useless battery-usage page. ACTION_APPLICATION_DETAILS_SETTINGS only
+                // shows the battery toggle for apps that have consumed significant battery,
+                // so new installs never see it. The standard battery-optimization list
+                // (ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) shows all apps via the
+                // "All apps" dropdown — reliable across all MIUI versions.
+                try {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$packageName")
+                    })
+                }
+            } else {
+                try {
+                    startActivity(
+                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    )
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
             }
-            startActivity(intent)
         }
     }
 
-    /** Launches the system dialog to activate device admin (deletion protection). */
     fun requestDeviceAdmin() {
         val adminComponent = ComponentName(this, FocusDeviceAdminReceiver::class.java)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
@@ -363,8 +477,11 @@ fun MainScreen(
     onRequestDeviceAdmin: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val authState by viewModel.authState.collectAsState()
-    var serviceEnabled by remember { mutableStateOf(false) }
+    var serviceEnabled by remember { mutableStateOf(true) }
+    // Whether the service has ever been confirmed on in this process lifetime.
+    var serviceEverConfirmedOn by remember { mutableStateOf(false) }
+    // Timestamp of the first poll in the *current* consecutive off-run; Long.MIN_VALUE when service is on.
+    var serviceWentOffAt by remember { mutableLongStateOf(Long.MIN_VALUE) }
     var batteryOptIgnored by remember { mutableStateOf(true) }
     var overlayGranted by remember { mutableStateOf(true) }
     var miuiDevice by remember { mutableStateOf(false) }
@@ -378,94 +495,67 @@ fun MainScreen(
         selectedTab = pagerState.currentPage
     }
 
-    // When guard fires and sends a motivation URL, jump to Motivation tab
     LaunchedEffect(pendingMotivationUrl) {
         if (!pendingMotivationUrl.isNullOrBlank()) {
             selectedTab = 3
-            pagerState.animateScrollToPage(3)
+            pagerState.scrollToPage(3)
         }
     }
 
-    // Check service + permission statuses periodically
     LaunchedEffect(Unit) {
         while (true) {
-            serviceEnabled = isServiceEnabled()
+            val isOn = isServiceEnabled()
+            val now = System.currentTimeMillis()
+            if (isOn) {
+                serviceEverConfirmedOn = true
+                serviceWentOffAt = Long.MIN_VALUE   // reset current off-run
+                serviceEnabled = true
+            } else {
+                // Record the start of this off-run (only on first off-poll, reset when service comes back).
+                if (serviceWentOffAt == Long.MIN_VALUE) serviceWentOffAt = now
+                val offRunMs = now - serviceWentOffAt
+
+                if (!serviceEverConfirmedOn) {
+                    serviceEnabled = false
+                } else {
+                    if (offRunMs >= 5_000L) serviceEnabled = false
+                }
+            }
             batteryOptIgnored = isBatteryOptimizationIgnored()
             overlayGranted = canDrawOverlays()
             miuiDevice = isMiui()
             miuiAutostartGranted = isMiuiAutostartEnabled()
             miuiBackgroundPopupGranted = isMiuiBackgroundPopupEnabled()
-            delay(2000)
+            kotlinx.coroutines.delay(2000)
         }
     }
 
-    // Poll server for config and pending changes updates
-    LaunchedEffect(Unit) {
-        while (true) {
-            viewModel.fetchConfig()
-            viewModel.fetchPendingChanges()
-            delay(30_000) // Every 30 seconds (accessibility service handles the 3-second blocking poll)
-        }
-    }
-
+    val s = LocalStrings.current
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            when (selectedTab) {
-                                0 -> "Home"
-                                1 -> "Block List"
-                                2 -> "Whitelist"
-                                3 -> "Motivation"
-                                else -> "Focus Blocker"
-                            }
-                        )
-                        authState.userEmail?.let { email ->
-                            Text(email, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        viewModel.fetchConfig()
-                        viewModel.fetchPendingChanges()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = onOpenAccessibilitySettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                    IconButton(onClick = { viewModel.logout() }) {
-                        Icon(Icons.Default.Close, contentDescription = "Logout")
-                    }
-                }
-            )
-        },
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    label = { Text("Home") },
+                    label = { Text(s.tabHome) },
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0; scope.launch { pagerState.animateScrollToPage(0) } }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Block, contentDescription = null) },
-                    label = { Text("Block") },
+                    label = { Text(s.tabBlock) },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1; scope.launch { pagerState.animateScrollToPage(1) } }
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Shield, contentDescription = null) },
-                    label = { Text("Whitelist") },
+                    label = { Text(s.tabWhitelist) },
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2; scope.launch { pagerState.animateScrollToPage(2) } }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                    label = { Text("Motivation") },
+                    icon = { Icon(Icons.Default.VideoLibrary, contentDescription = null) },
+                    label = { Text(s.tabMotivation) },
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3; scope.launch { pagerState.animateScrollToPage(3) } }
                 )
@@ -480,32 +570,250 @@ fun MainScreen(
                 0 -> HomePage(viewModel, uiState, serviceEnabled, batteryOptIgnored, overlayGranted, miuiDevice, miuiAutostartGranted, miuiBackgroundPopupGranted, onOpenAccessibilitySettings, onRequestBatteryExclusion, onOpenOverlaySettings, onOpenMiuiAutostartSettings, onOpenMiuiOverlaySettings, onRequestDeviceAdmin)
                 1 -> BlockPage(viewModel, uiState)
                 2 -> WhitelistPage(viewModel, uiState)
-                3 -> MotivationPage(
-                    viewModel = viewModel,
-                    uiState = uiState,
-                    autoPlayUrl = if (pagerState.currentPage == 3) pendingMotivationUrl else null,
-                    onAutoPlayConsumed = onMotivationUrlConsumed
-                )
+                3 -> MotivationPage(viewModel = viewModel, uiState = uiState)
             }
         }
+    }
 
-        uiState.errorMessage?.let { message ->
-            Snackbar(
-                modifier = Modifier.padding(16.dp),
-                action = {
-                    TextButton(onClick = { viewModel.clearMessages() }) { Text("Dismiss") }
+    pendingMotivationUrl?.let { url ->
+        MotivationPlayerWithResolution(
+            rawUrl = url,
+            viewModel = viewModel,
+            duration = uiState.motivation.duration,
+            onDismiss = onMotivationUrlConsumed
+        )
+    }
+    }
+}
+
+// ==================================
+// SUPPORT HEADER
+// ==================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SupportHeader() {
+    val context = LocalContext.current
+    val s = LocalStrings.current
+    val isHebrew = LocalIsHebrew.current
+    val onToggleLanguage = LocalOnToggleLanguage.current
+    val themeMode = LocalThemeMode.current
+    val onThemeChange = LocalOnThemeChange.current
+    var showCoffeeDialog by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
+
+    if (showCoffeeDialog) {
+        CoffeeDialog(onDismiss = { showCoffeeDialog = false })
+    }
+
+    if (showSettingsMenu) {
+        Dialog(
+            onDismissRequest = { showSettingsMenu = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            val topPad = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 64.dp
+            var cardVisible by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { cardVisible = true }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.25f))
+                        .clickable { showSettingsMenu = false }
+                )
+                AnimatedVisibility(
+                    visible = cardVisible,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it / 3 }),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = topPad, end = 12.dp)
+                ) {
+                    Card(
+                        onClick = {},
+                        shape = RoundedCornerShape(24.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                        modifier = Modifier.width(300.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Language, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Text(s.settingsLanguage, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    SettingsChip("English", !isHebrew) { if (isHebrew) onToggleLanguage() }
+                                    SettingsChip("עברית", isHebrew) { if (!isHebrew) onToggleLanguage() }
+                                }
+                            }
+                            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Palette, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Text(s.settingsTheme, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    SettingsChip(s.themeLight, themeMode == "light", modifier = Modifier.weight(1f)) { onThemeChange("light") }
+                                    SettingsChip(s.themeDark, themeMode == "dark", modifier = Modifier.weight(1f)) { onThemeChange("dark") }
+                                    SettingsChip(s.themeSystem, themeMode == "system", modifier = Modifier.weight(1f)) { onThemeChange("system") }
+                                }
+                            }
+                        }
+                    }
                 }
-            ) { Text("❌ $message") }
+            }
         }
+    }
 
-        uiState.successMessage?.let { message ->
-            Snackbar(
-                modifier = Modifier.padding(16.dp),
-                action = {
-                    TextButton(onClick = { viewModel.clearMessages() }) { Text("OK") }
-                },
-                containerColor = Color(0xFF4CAF50)
-            ) { Text(message, color = Color.White) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedButton(
+            onClick = { openUrlInBrowser(context, CONTACT_FORM_URL) },
+            modifier = Modifier.weight(1f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+        ) {
+            Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(s.contactUs, style = MaterialTheme.typography.labelMedium)
+        }
+        OutlinedButton(
+            onClick = { showCoffeeDialog = true },
+            modifier = Modifier.weight(1f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+        ) {
+            Text("☕", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.width(6.dp))
+            Text(s.supportUs, style = MaterialTheme.typography.labelMedium)
+        }
+        IconButton(onClick = { showSettingsMenu = !showSettingsMenu }) {
+            Icon(
+                Icons.Default.Settings,
+                contentDescription = s.settingsTitle,
+                tint = if (showSettingsMenu) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
+// ==================================
+// COFFEE DIALOG
+// ==================================
+
+@Composable
+fun CoffeeDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val manager = remember { DonationManager(context) }
+    val donationState by manager.state.collectAsState()
+    val s = LocalStrings.current
+
+    DisposableEffect(Unit) {
+        manager.connect()
+        onDispose { manager.disconnect() }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (donationState !is DonationManager.State.Loading) onDismiss() },
+        title = { Text(s.supportUsDialogTitle) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                when (val ds = donationState) {
+                    is DonationManager.State.Loading -> {
+                        Text(s.supportUsBody, style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                    is DonationManager.State.Ready -> {
+                        Text(s.supportUsBody, style = MaterialTheme.typography.bodyMedium)
+                        ds.products.forEach { product ->
+                            val price = product.oneTimePurchaseOfferDetails?.formattedPrice
+                                ?: return@forEach
+                            OutlinedButton(
+                                onClick = { activity?.let { manager.launchPurchase(it, product) } },
+                                modifier = Modifier.fillMaxWidth(),
+                                contentPadding = PaddingValues(vertical = 12.dp)
+                            ) {
+                                Text(price, style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    }
+                    is DonationManager.State.Success -> {
+                        Text(s.thankYou, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    is DonationManager.State.Unavailable -> {
+                        Text(s.tipsUnavailable, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when (donationState) {
+                is DonationManager.State.Success,
+                is DonationManager.State.Unavailable -> Button(onClick = onDismiss) { Text(s.close) }
+                else -> {}
+            }
+        },
+        dismissButton = {
+            when (donationState) {
+                is DonationManager.State.Loading,
+                is DonationManager.State.Ready -> TextButton(onClick = onDismiss) { Text(s.cancel) }
+                else -> {}
+            }
+        }
+    )
+}
+
+// ==================================
+// SETTINGS CHIP
+// ==================================
+
+@Composable
+fun SettingsChip(
+    label: String,
+    selected: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                start = if (icon != null) 10.dp else 14.dp,
+                end = 14.dp, top = 7.dp, bottom = 7.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1
+            )
         }
     }
 }
@@ -537,35 +845,26 @@ fun HomePage(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Only show warning cards when something needs attention
+        item { SupportHeader() }
+
+        item { StatsCard(uiState) }
+
         if (!serviceEnabled) {
-            item {
-                EnablePermissionsCard(onOpenSettings = onOpenAccessibilitySettings)
-            }
+            item { EnablePermissionsCard(onOpenSettings = onOpenAccessibilitySettings) }
         }
 
         if (!batteryOptIgnored) {
-            item {
-                BatteryOptimizationCard(onRequestExclusion = onRequestBatteryExclusion)
-            }
+            item { BatteryOptimizationCard(onRequestExclusion = onRequestBatteryExclusion) }
         }
 
-        // On MIUI: show overlay card only if not granted AND not the MIUI device
-        // (on MIUI the dedicated MiuiOverlayCard handles this below)
-        if (!overlayGranted && !miuiDevice) {
-            item {
-                OverlayPermissionCard(onRequest = onOpenOverlaySettings)
-            }
+        if (!overlayGranted) {
+            item { OverlayPermissionCard(onRequest = onOpenOverlaySettings) }
         }
 
-        // MIUI-specific: Autostart card (disappears once granted)
         if (miuiDevice && !miuiAutostartGranted) {
-            item {
-                MiuiAutostartCard(onOpenSettings = onOpenMiuiAutostartSettings)
-            }
+            item { MiuiAutostartCard(onOpenSettings = onOpenMiuiAutostartSettings) }
         }
 
-        // MIUI-specific: Display pop-up windows card (disappears once overlay is granted)
         if (miuiDevice && (!overlayGranted || !miuiBackgroundPopupGranted)) {
             item {
                 MiuiOverlayCard(
@@ -576,27 +875,47 @@ fun HomePage(
             }
         }
 
-        // Deletion protection toggle
         item {
-            DeletionProtectionCard(
-                isEnabled = uiState.deletionProtectionEnabled,
-                isPendingDisable = uiState.pendingChanges.any { it.type == "disable_deletion_protection" },
-                pendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_deletion_protection" },
-                onEnable = {
+            ProtectionSettingsCard(
+                deletionProtectionEnabled = uiState.deletionProtectionEnabled,
+                deletionPendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_deletion_protection" },
+                onEnableDeletion = {
                     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                     val adminComponent = ComponentName(context, FocusDeviceAdminReceiver::class.java)
-                    if (dpm.isAdminActive(adminComponent)) {
-                        viewModel.onDeviceAdminEnabled()
-                    } else {
-                        onRequestDeviceAdmin()
-                    }
+                    if (dpm.isAdminActive(adminComponent)) viewModel.onDeviceAdminEnabled()
+                    else onRequestDeviceAdmin()
                 },
-                onRequestDisable = { viewModel.requestDisableDeletionProtection() },
-                onCancelDisable = { change -> viewModel.cancelPendingChange(change.id) }
+                onRequestDisableDeletion = { viewModel.requestDisableDeletionProtection() },
+                onCancelDeletionDisable = { change -> viewModel.cancelPendingChange(change.id) },
+                lockEnabled = uiState.lockEnabled,
+                lockPendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_lock" },
+                onEnableLock = { viewModel.enableLock() },
+                onRequestDisableLock = { viewModel.requestDisableLock() },
+                onCancelLockDisable = { change -> viewModel.cancelPendingChange(change.id) },
+                hideAppIcon = uiState.hideAppIcon,
+                onHideAppIconChange = { viewModel.setHideAppIcon(it) },
+                hideIconPendingChange = uiState.pendingChanges.firstOrNull { it.type == "show_app_icon" },
+                onCancelHideIconDisable = { change -> viewModel.cancelPendingChange(change.id) },
+                settingsProtectionLevel = uiState.settingsProtectionLevel,
+                onSettingsProtectionChange = { viewModel.setSettingsProtectionLevel(it) },
+                settingsProtectionPendingChange = uiState.pendingChanges.firstOrNull { it.type == "lower_settings_protection" },
+                onCancelSettingsProtectionChange = { change -> viewModel.cancelPendingChange(change.id) }
             )
         }
 
-        // Pending changes summary (if any)
+        item {
+            AdditionalBlockingCard(
+                adultBlockingLevel = uiState.adultBlockingLevel,
+                adultPendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_adult_blocking" },
+                onAdultLevelChange = { level -> viewModel.setAdultBlockingLevel(level) },
+                onCancelAdultDisable = { change -> viewModel.cancelPendingChange(change.id) },
+                blockYoutubeShorts = uiState.blockYoutubeShorts,
+                onBlockYoutubeShortsChange = { viewModel.setBlockYoutubeShorts(it) },
+                blockInstagramReels = uiState.blockInstagramReels,
+                onBlockInstagramReelsChange = { viewModel.setBlockInstagramReels(it) }
+            )
+        }
+
         if (uiState.pendingChanges.isNotEmpty()) {
             item {
                 PendingChangesCard(
@@ -606,18 +925,7 @@ fun HomePage(
             }
         }
 
-        // Statistics
-        item {
-            StatsCard(uiState)
-        }
-
-        // Advanced Settings
-        item {
-            AdvancedSettingsSection(
-                serverUrl = uiState.serverUrl,
-                onServerUrlChange = { viewModel.updateServerUrl(it) }
-            )
-        }
+        item { Spacer(modifier = Modifier.height(32.dp)) }
     }
 }
 
@@ -627,6 +935,7 @@ fun HomePage(
 
 @Composable
 fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
+    val s = LocalStrings.current
     var showAppPicker by remember { mutableStateOf(false) }
 
     if (showAppPicker) {
@@ -643,9 +952,8 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Blocked Apps
         item {
-            Text("Blocked Apps", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(s.blockedAppsTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputWithPicker(
@@ -655,22 +963,34 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
                 onPickApp = { showAppPicker = true }
             )
         }
-        items(uiState.blockedPackages.toList()) { packageName ->
-            val pendingRemoval = uiState.pendingChanges.firstOrNull {
-                it.type == "remove_blocked_package" && it.value == packageName
-            }
-            BlockedItemCard(
-                text = packageName,
-                pendingChange = pendingRemoval,
-                onRemove = { viewModel.removeBlockedPackage(packageName) },
-                onCancelPending = { pendingRemoval?.let { viewModel.cancelPendingChange(it.id) } }
+        item {
+            AppIconGrid(
+                packages = uiState.blockedPackages.toList(),
+                pendingChanges = uiState.pendingChanges.filter { it.type == "remove_blocked_package" },
+                onRemove = { viewModel.removeBlockedPackage(it) },
+                onCancelPending = { viewModel.cancelPendingChange(it.id) }
             )
         }
 
-        // Blocked Keywords
         item {
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Blocked Keywords", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(s.blockedWebsitesTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+        item {
+            ItemInputSection(placeholder = "facebook.com", onAdd = { viewModel.addBlockedWebsite(it) })
+        }
+        item {
+            WebsiteIconGrid(
+                websites = uiState.blockedWebsites.toList(),
+                pendingChanges = uiState.pendingChanges.filter { it.type == "remove_blocked_website" },
+                onRemove = { viewModel.removeBlockedWebsite(it) },
+                onCancelPending = { viewModel.cancelPendingChange(it) }
+            )
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(s.blockedKeywordsTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputSection(placeholder = "gambling", onAdd = { viewModel.addBlockedKeyword(it) })
@@ -687,26 +1007,6 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
             )
         }
 
-        // Blocked Websites
-        item {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Blocked Websites", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        }
-        item {
-            ItemInputSection(placeholder = "facebook.com", onAdd = { viewModel.addBlockedWebsite(it) })
-        }
-        items(uiState.blockedWebsites.toList()) { website ->
-            val pendingRemoval = uiState.pendingChanges.firstOrNull {
-                it.type == "remove_blocked_website" && it.value == website
-            }
-            BlockedItemCard(
-                text = website,
-                pendingChange = pendingRemoval,
-                onRemove = { viewModel.removeBlockedWebsite(website) },
-                onCancelPending = { pendingRemoval?.let { viewModel.cancelPendingChange(it.id) } }
-            )
-        }
-
         item { Spacer(modifier = Modifier.height(32.dp)) }
     }
 }
@@ -717,6 +1017,7 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
 
 @Composable
 fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiState) {
+    val s = LocalStrings.current
     var showAppPicker by remember { mutableStateOf(false) }
 
     if (showAppPicker) {
@@ -727,7 +1028,6 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
         )
     }
 
-    // Pending whitelist additions not yet confirmed
     val pendingWhitelistPackages = uiState.pendingChanges.filter { it.type == "add_whitelisted_package" }
     val pendingWhitelistWebsites = uiState.pendingChanges.filter { it.type == "add_whitelisted_website" }
 
@@ -736,24 +1036,7 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("ℹ️ About Whitelists", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Whitelisted apps and websites are never blocked. Adding items takes 24 hours to take effect.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-        }
-
-        // Whitelisted Apps
-        item {
-            Text("Whitelisted Apps", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(s.whitelistedAppsTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputWithPicker(
@@ -763,14 +1046,15 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
                 onPickApp = { showAppPicker = true }
             )
         }
-        items(uiState.whitelistedPackages.toList()) { packageName ->
-            ItemCard(
-                text = packageName,
-                onRemove = { viewModel.removeWhitelistedPackage(packageName) },
-                isProtected = packageName == "com.focusapp.blocker"
+        item {
+            AppIconGrid(
+                packages = uiState.whitelistedPackages.toList(),
+                pendingChanges = emptyList(),
+                onRemove = { viewModel.removeWhitelistedPackage(it) },
+                onCancelPending = {},
+                protectedPackages = setOf("com.focusapp.blocker")
             )
         }
-        // Pending whitelist package additions
         items(pendingWhitelistPackages) { change ->
             PendingAddCard(
                 text = change.value ?: "",
@@ -779,26 +1063,40 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
             )
         }
 
-        // Whitelisted Websites
         item {
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Whitelisted Websites", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(s.whitelistedWebsitesTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
             ItemInputSection(placeholder = "yourbank.com", onAdd = { viewModel.addWhitelistedWebsite(it) })
         }
-        items(uiState.whitelistedWebsites.toList()) { website ->
-            ItemCard(
-                text = website,
-                onRemove = { viewModel.removeWhitelistedWebsite(website) }
+        item {
+            WebsiteIconGrid(
+                websites = uiState.whitelistedWebsites.toList(),
+                pendingChanges = emptyList(),
+                onRemove = { viewModel.removeWhitelistedWebsite(it) },
+                onCancelPending = {}
             )
         }
-        // Pending whitelist website additions
         items(pendingWhitelistWebsites) { change ->
             PendingAddCard(
                 text = change.value ?: "",
                 scheduledFor = change.scheduledFor,
                 onCancel = { viewModel.cancelPendingChange(change.id) }
+            )
+        }
+
+        item {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(s.whitelistedKeywordsTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+        item {
+            ItemInputSection(placeholder = "mysite.com", onAdd = { viewModel.addWhitelistedKeyword(it) })
+        }
+        items(uiState.whitelistedKeywords.toList()) { keyword ->
+            ItemCard(
+                text = keyword,
+                onRemove = { viewModel.removeWhitelistedKeyword(keyword) }
             )
         }
 
@@ -811,100 +1109,288 @@ fun WhitelistPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.App
 // ==================================
 
 @Composable
-fun DeletionProtectionCard(
-    isEnabled: Boolean,
-    isPendingDisable: Boolean,
-    pendingChange: PendingChange?,
-    onEnable: () -> Unit,
-    onRequestDisable: () -> Unit,
-    onCancelDisable: (PendingChange) -> Unit
+fun ProtectionSettingsCard(
+    deletionProtectionEnabled: Boolean,
+    deletionPendingChange: PendingChange?,
+    onEnableDeletion: () -> Unit,
+    onRequestDisableDeletion: () -> Unit,
+    onCancelDeletionDisable: (PendingChange) -> Unit,
+    lockEnabled: Boolean,
+    lockPendingChange: PendingChange?,
+    onEnableLock: () -> Unit,
+    onRequestDisableLock: () -> Unit,
+    onCancelLockDisable: (PendingChange) -> Unit,
+    hideAppIcon: Boolean,
+    onHideAppIconChange: (Boolean) -> Unit,
+    hideIconPendingChange: PendingChange?,
+    onCancelHideIconDisable: (PendingChange) -> Unit,
+    settingsProtectionLevel: Int,
+    onSettingsProtectionChange: (Int) -> Unit,
+    settingsProtectionPendingChange: PendingChange?,
+    onCancelSettingsProtectionChange: (PendingChange) -> Unit
 ) {
+    val s = LocalStrings.current
+    val levelLabels = listOf(s.levelOff, s.levelLow, s.levelHigh)
+    var showLockWarning by remember { mutableStateOf(false) }
+
+    if (showLockWarning) {
+        AlertDialog(
+            onDismissRequest = { showLockWarning = false },
+            title = { Text(s.lock24hWarningTitle, fontWeight = FontWeight.Bold) },
+            text = { Text(s.lock24hWarningBody, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                Button(
+                    onClick = { showLockWarning = false; onEnableLock() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C4DFF))
+                ) { Text(s.lock24hWarningConfirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLockWarning = false }) { Text(s.cancel) }
+            }
+        )
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isEnabled) Color(0xFFE3F2FD) else Color(0xFFF5F5F5)
-        )
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            Text(s.protectionTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            ProtectionToggleRow(
+                icon = Icons.Default.Shield,
+                iconColor = Color(0xFF1565C0),
+                title = s.deletionProtTitle,
+                subtitle = s.deletionProtSubtitle,
+                isEnabled = deletionProtectionEnabled,
+                pendingChange = deletionPendingChange,
+                onEnable = onEnableDeletion,
+                onRequestDisable = onRequestDisableDeletion,
+                onCancelDisable = onCancelDeletionDisable
+            )
+            Divider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+            ProtectionToggleRow(
+                icon = Icons.Default.Lock,
+                iconColor = Color(0xFF7C4DFF),
+                title = s.lock24hTitle,
+                subtitle = s.lock24hSubtitle,
+                isEnabled = lockEnabled,
+                pendingChange = lockPendingChange,
+                onEnable = { showLockWarning = true },
+                onRequestDisable = onRequestDisableLock,
+                onCancelDisable = onCancelLockDisable
+            )
+            Divider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+            ProtectionToggleRow(
+                icon = Icons.Default.Settings,
+                iconColor = Color(0xFF37474F),
+                title = s.hideIconTitle,
+                subtitle = s.hideIconSubtitle,
+                isEnabled = hideAppIcon,
+                pendingChange = hideIconPendingChange,
+                onEnable = { onHideAppIconChange(true) },
+                onRequestDisable = { onHideAppIconChange(false) },
+                onCancelDisable = onCancelHideIconDisable
+            )
+            Divider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Shield,
-                        contentDescription = null,
-                        tint = if (isEnabled) Color(0xFF1565C0) else Color.Gray
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier.size(38.dp).background(Color(0xFF1565C0).copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF1565C0), modifier = Modifier.size(20.dp))
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(s.protectSettingsTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Deletion Protection",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        when (settingsProtectionLevel) {
+                            1 -> s.protectSettingsLow
+                            2 -> s.protectSettingsHigh
+                            else -> s.protectSettingsOff
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                 }
-                Text(
-                    if (isEnabled) "🔒 ON" else "OFF",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isEnabled) Color(0xFF1565C0) else Color.Gray
-                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "When enabled, the app becomes a Device Administrator. " +
-                    "Android requires deactivating admin status before the app can be uninstalled.",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (!isEnabled && !isPendingDisable) {
-                Button(
-                    onClick = onEnable,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
-                ) {
-                    Text("Enable Deletion Protection")
-                }
-            } else if (isEnabled && !isPendingDisable) {
-                OutlinedButton(
-                    onClick = onRequestDisable,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Request to Disable (24h delay)")
-                }
-            } else if (isPendingDisable && pendingChange != null) {
-                // Show pending disable with countdown and cancel option
-                val hoursLeft = hoursUntil(pendingChange.scheduledFor)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                levelLabels.forEachIndexed { index, label ->
+                    val selected = settingsProtectionLevel == index
+                    OutlinedButton(
+                        onClick = { onSettingsProtectionChange(index) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (selected) Color(0xFF1565C0) else Color.Transparent,
+                            contentColor = if (selected) Color.White else Color(0xFF1565C0)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (selected) Color(0xFF1565C0) else MaterialTheme.colorScheme.outline
+                        ),
+                        contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
-                        Column {
-                            Text(
-                                "⏳ Disabling in ~${hoursLeft}h",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFE65100)
-                            )
-                            Text(
-                                "Tap cancel to keep protection on",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray
-                            )
-                        }
-                        TextButton(
-                            onClick = { onCancelDisable(pendingChange) },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+                        Text(label, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+            if (settingsProtectionPendingChange != null) {
+                val targetLevel = settingsProtectionPendingChange.value?.toIntOrNull() ?: 0
+                val targetLabel = levelLabels.getOrElse(targetLevel) { s.levelOff }
+                val hoursLeft = hoursUntil(settingsProtectionPendingChange.scheduledFor)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        s.loweringToLevel(targetLabel, hoursLeft),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFE65100),
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { onCancelSettingsProtectionChange(settingsProtectionPendingChange) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+                    ) { Text(s.cancel, style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AdditionalBlockingCard(
+    adultBlockingLevel: Int,
+    adultPendingChange: PendingChange?,
+    onAdultLevelChange: (Int) -> Unit,
+    onCancelAdultDisable: (PendingChange) -> Unit,
+    blockYoutubeShorts: Boolean,
+    onBlockYoutubeShortsChange: (Boolean) -> Unit,
+    blockInstagramReels: Boolean,
+    onBlockInstagramReelsChange: (Boolean) -> Unit
+) {
+    val s = LocalStrings.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(s.additionalBlockingTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            AdultBlockingLevelRow(
+                level = adultBlockingLevel,
+                pendingChange = adultPendingChange,
+                onLevelChange = onAdultLevelChange,
+                onCancelPending = onCancelAdultDisable
+            )
+            Divider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+            ProtectionToggleRow(
+                icon = Icons.Default.PlayArrow,
+                iconColor = Color(0xFFFF0000),
+                title = s.blockShortsTitle,
+                subtitle = s.blockShortsSubtitle,
+                isEnabled = blockYoutubeShorts,
+                pendingChange = null,
+                onEnable = { onBlockYoutubeShortsChange(true) },
+                onRequestDisable = { onBlockYoutubeShortsChange(false) },
+                onCancelDisable = {}
+            )
+            Divider(modifier = Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.surfaceVariant)
+            ProtectionToggleRow(
+                icon = Icons.Default.VideoLibrary,
+                iconColor = Color(0xFFE1306C),
+                title = s.blockReelsTitle,
+                subtitle = s.blockReelsSubtitle,
+                isEnabled = blockInstagramReels,
+                pendingChange = null,
+                onEnable = { onBlockInstagramReelsChange(true) },
+                onRequestDisable = { onBlockInstagramReelsChange(false) },
+                onCancelDisable = {}
+            )
+        }
+    }
+}
+
+@Composable
+fun AdultBlockingLevelRow(
+    level: Int,
+    pendingChange: PendingChange?,
+    onLevelChange: (Int) -> Unit,
+    onCancelPending: (PendingChange) -> Unit
+) {
+    val s = LocalStrings.current
+    val iconColor = Color(0xFFAD1457)
+    val pendingColor = Color(0xFFE65100)
+    val levels = listOf(s.adultLevelOff, s.adultLevelSites, s.adultLevelStrict)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(iconColor.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Block, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(s.adultBlockingTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(s.adultBlockingSubtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (pendingChange != null) {
+                val hoursLeft = hoursUntil(pendingChange.scheduledFor)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        s.disablingInHours(hoursLeft),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = pendingColor,
+                        fontWeight = FontWeight.Medium
+                    )
+                    TextButton(
+                        onClick = { onCancelPending(pendingChange) },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+                    ) { Text(s.cancel, style = MaterialTheme.typography.labelSmall) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                levels.forEachIndexed { idx, label ->
+                    val isSelected = idx == level
+                    val isPendingOff = idx == 0 && pendingChange != null
+                    val containerColor = when {
+                        isPendingOff -> pendingColor.copy(alpha = 0.15f)
+                        isSelected -> MaterialTheme.colorScheme.primaryContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
+                    val labelColor = when {
+                        isPendingOff -> pendingColor
+                        isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    }
+                    Surface(
+                        onClick = { onLevelChange(idx) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = containerColor,
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 10.dp)
                         ) {
-                            Text("Cancel")
+                            Text(label, style = MaterialTheme.typography.labelSmall, color = labelColor, fontWeight = if (isSelected || isPendingOff) FontWeight.SemiBold else FontWeight.Normal)
                         }
                     }
                 }
@@ -914,30 +1400,92 @@ fun DeletionProtectionCard(
 }
 
 @Composable
+fun ProtectionToggleRow(
+    icon: ImageVector,
+    iconColor: Color,
+    title: String,
+    subtitle: String,
+    isEnabled: Boolean,
+    pendingChange: PendingChange?,
+    onEnable: () -> Unit,
+    onRequestDisable: () -> Unit,
+    onCancelDisable: (PendingChange) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(38.dp).background(iconColor.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
+        }
+        val s = LocalStrings.current
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (pendingChange != null) {
+                val hoursLeft = hoursUntil(pendingChange.scheduledFor)
+                Text(
+                    s.disablingInHours(hoursLeft),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFE65100),
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+        if (pendingChange != null) {
+            TextButton(
+                onClick = { onCancelDisable(pendingChange) },
+                colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
+            ) { Text(s.cancel, style = MaterialTheme.typography.labelMedium) }
+        } else {
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = { checked -> if (checked) onEnable() else onRequestDisable() }
+            )
+        }
+    }
+}
+
+@Composable
 fun PendingChangesCard(
     pendingChanges: List<PendingChange>,
     onCancel: (PendingChange) -> Unit
 ) {
-    // Exclude deletion protection from this summary (it has its own card)
-    val displayChanges = pendingChanges.filter { it.type != "disable_deletion_protection" }
+    val displayChanges = pendingChanges.filter {
+        it.type != "disable_deletion_protection" && it.type != "disable_adult_blocking" &&
+            it.type != "disable_lock" && it.type != "unlock_duration" && it.type != "unlock_content" &&
+            it.type != "show_app_icon" && it.type != "lower_settings_protection" &&
+            it.type != "disable_motivation_on_block" && it.type != "disable_motivation_on_settings"
+    }
     if (displayChanges.isEmpty()) return
 
+    val isDark = isSystemInDarkTheme()
+    val cardBg       = if (isDark) Color(0xFF2D2600) else Color(0xFFFFF8E1)
+    val accentColor  = if (isDark) Color(0xFFFFB300) else Color(0xFFE65100)
+    val dividerColor = if (isDark) Color(0xFF4D3B00) else Color(0xFFFFE082)
+    val closeColor   = if (isDark) Color(0xFFFF6B6B) else Color.Red
+
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+        colors = CardDefaults.cardColors(containerColor = cardBg)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "⏳ Scheduled Changes (${displayChanges.size})",
+                s.scheduledChangesTitle(displayChanges.size),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFE65100)
+                color = accentColor
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "These changes will take effect after 24 hours. Tap × to cancel.",
+                s.scheduledChangesBody,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
             Spacer(modifier = Modifier.height(8.dp))
             displayChanges.forEach { change ->
@@ -949,25 +1497,26 @@ fun PendingChangesCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            formatChangeType(change.type),
+                            s.formatChangeType(change.type),
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                         Text(
                             change.value ?: "",
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
-                        "~${hoursLeft}h",
+                        s.hoursLeft(hoursLeft),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFE65100)
+                        color = accentColor
                     )
                     IconButton(onClick = { onCancel(change) }) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.Red, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = closeColor, modifier = Modifier.size(18.dp))
                     }
                 }
-                Divider(color = Color(0xFFFFE082))
+                Divider(color = dividerColor)
             }
         }
     }
@@ -975,20 +1524,21 @@ fun PendingChangesCard(
 
 @Composable
 fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "⚠️ Enable Permissions",
+                s.enablePermTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFC62828)
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "1. Tap the button below\n2. Go to \"Downloaded apps → Focus Blocker\"\n3. Toggle \"Use Focus Blocker\" ON",
+                s.enablePermBody,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -1000,7 +1550,7 @@ fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
             ) {
                 Icon(Icons.Default.Settings, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Open Accessibility Settings")
+                Text(s.openAccessibilitySettings)
             }
         }
     }
@@ -1008,20 +1558,21 @@ fun EnablePermissionsCard(onOpenSettings: () -> Unit) {
 
 @Composable
 fun BatteryOptimizationCard(onRequestExclusion: () -> Unit) {
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "⚡ Battery Optimization",
+                s.batteryOptTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFE65100)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Android may stop blocking after 1-2 days unless you disable battery optimization for this app. Tap below to fix this.",
+                s.batteryOptBody,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -1029,9 +1580,9 @@ fun BatteryOptimizationCard(onRequestExclusion: () -> Unit) {
             Button(
                 onClick = onRequestExclusion,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF616161))
             ) {
-                Text("Disable Battery Optimization")
+                Text(s.disableBatteryOpt)
             }
         }
     }
@@ -1039,20 +1590,21 @@ fun BatteryOptimizationCard(onRequestExclusion: () -> Unit) {
 
 @Composable
 fun OverlayPermissionCard(onRequest: () -> Unit) {
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "🪟 Display Pop-up Permission",
+                s.overlayPermTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFE65100)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Required so the app can reopen itself when you try to access protected settings. Tap below and enable \"Display pop-up windows\".",
+                s.overlayPermBody,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -1062,7 +1614,7 @@ fun OverlayPermissionCard(onRequest: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
             ) {
-                Text("Grant Permission")
+                Text(s.grantPermission)
             }
         }
     }
@@ -1070,20 +1622,21 @@ fun OverlayPermissionCard(onRequest: () -> Unit) {
 
 @Composable
 fun MiuiAutostartCard(onOpenSettings: () -> Unit) {
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "🚀 Enable Autostart (MIUI)",
+                s.miuiAutostartTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFE65100)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "MIUI/Poco restricts apps from starting automatically. Enable Autostart so the blocker can restart itself after a reboot and reopen when you access protected settings.",
+                s.miuiAutostartBody,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
@@ -1093,7 +1646,7 @@ fun MiuiAutostartCard(onOpenSettings: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
             ) {
-                Text("Enable Autostart")
+                Text(s.enableAutostart)
             }
         }
     }
@@ -1105,48 +1658,35 @@ fun MiuiOverlayCard(
     backgroundPopupGranted: Boolean,
     onOpenSettings: () -> Unit
 ) {
+    val s = LocalStrings.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "🪟 Allow Pop-up Windows (MIUI)",
+                s.miuiOverlayTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFFE65100)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "MIUI/Poco requires two permissions so the app can reopen itself when you access protected settings. Open \"Other permissions\" and enable both:",
+                s.miuiOverlayBody,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF616161)
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (backgroundPopupGranted) "✅" else "❌",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Text(if (backgroundPopupGranted) "✅" else "❌", style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    "Open new windows while running in the background",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF616161)
-                )
+                Text(s.miuiOverlayPerm1, style = MaterialTheme.typography.bodySmall, color = Color(0xFF616161))
             }
             Spacer(modifier = Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (overlayGranted) "✅" else "❌",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Text(if (overlayGranted) "✅" else "❌", style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    "Display pop-up windows",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF616161)
-                )
+                Text(s.miuiOverlayPerm2, style = MaterialTheme.typography.bodySmall, color = Color(0xFF616161))
             }
             Spacer(modifier = Modifier.height(12.dp))
             Button(
@@ -1154,7 +1694,7 @@ fun MiuiOverlayCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6F00))
             ) {
-                Text("Open Other Permissions")
+                Text(s.openOtherPermissions)
             }
         }
     }
@@ -1162,78 +1702,309 @@ fun MiuiOverlayCard(
 
 @Composable
 fun StatsCard(uiState: com.focusapp.blocker.ui.AppUiState) {
+    val s = LocalStrings.current
+    val blockedColor = Color(0xFFE53935)
+    val whitelistedColor = Color(0xFF2E7D32)
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.cardColors(containerColor = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color(0xFFD5D8F8))
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("📊 Current Configuration", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                StatItem("Blocked Apps", uiState.blockedPackages.size.toString())
-                StatItem("Blocked Keywords", uiState.blockedKeywords.size.toString())
-                StatItem("Blocked Sites", uiState.blockedWebsites.size.toString())
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Text(
+                s.activeRules,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = blockedColor.copy(alpha = 0.10f)
+            ) {
+                Text(
+                    s.sectionBlocked,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = blockedColor,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                StatItem("Whitelisted Apps", uiState.whitelistedPackages.size.toString())
-                StatItem("Whitelisted Sites", uiState.whitelistedWebsites.size.toString())
-                Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                StatItem(s.statApps, uiState.blockedPackages.size.toString(), blockedColor)
+                StatItem(s.statSites, uiState.blockedWebsites.size.toString(), blockedColor)
+                StatItem(s.statKeywords, uiState.blockedKeywords.size.toString(), blockedColor)
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = whitelistedColor.copy(alpha = 0.10f)
+            ) {
+                Text(
+                    s.sectionWhitelisted,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = whitelistedColor,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                StatItem(s.statApps, uiState.whitelistedPackages.size.toString(), whitelistedColor)
+                StatItem(s.statSites, uiState.whitelistedWebsites.size.toString(), whitelistedColor)
+                StatItem(s.statKeywords, uiState.whitelistedKeywords.size.toString(), whitelistedColor)
             }
         }
     }
 }
 
 @Composable
-fun StatItem(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Text(label, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+fun RowScope.StatItem(label: String, value: String, color: Color = MaterialTheme.colorScheme.primary) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+        Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = color)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), textAlign = TextAlign.Center)
     }
 }
 
 @Composable
-fun AdvancedSettingsSection(serverUrl: String, onServerUrlChange: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    var editedUrl by remember { mutableStateOf(serverUrl) }
-
-    LaunchedEffect(serverUrl) { editedUrl = serverUrl }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Advanced Settings", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
-                Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = Color.Gray
-                )
+fun AppIconGrid(
+    packages: List<String>,
+    pendingChanges: List<PendingChange>,
+    onRemove: (String) -> Unit,
+    onCancelPending: (PendingChange) -> Unit,
+    protectedPackages: Set<String> = emptySet(),
+    columns: Int = 4
+) {
+    if (packages.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        packages.chunked(columns).forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                row.forEach { pkg ->
+                    val pending = pendingChanges.firstOrNull { it.value == pkg }
+                    AppIconItem(
+                        packageName = pkg,
+                        pendingChange = pending,
+                        onRemove = { onRemove(pkg) },
+                        onCancelPending = { pending?.let { onCancelPending(it) } },
+                        isProtected = pkg in protectedPackages,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
-            if (expanded) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Backend Server URL", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = editedUrl,
-                    onValueChange = { editedUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("https://focus-blocker-backend.onrender.com") },
-                    singleLine = true
+        }
+    }
+}
+
+@Composable
+fun AppIconItem(
+    packageName: String,
+    pendingChange: PendingChange?,
+    onRemove: () -> Unit,
+    onCancelPending: () -> Unit,
+    isProtected: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val (iconBitmap, appName) = remember(packageName) {
+        try {
+            val pm = context.packageManager
+            @Suppress("DEPRECATION")
+            val info = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationIcon(info).toBitmap(64, 64).asImageBitmap() to
+                pm.getApplicationLabel(info).toString()
+        } catch (e: Exception) {
+            null to packageName
+        }
+    }
+    val hasPending = pendingChange != null
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(modifier = Modifier.size(52.dp)) {
+            if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap,
+                    contentDescription = appName,
+                    modifier = Modifier.size(48.dp).align(Alignment.Center)
+                        .alpha(if (hasPending) 0.5f else 1f)
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = { onServerUrlChange(editedUrl) }, modifier = Modifier.align(Alignment.End)) {
-                    Text("Save URL")
+            } else {
+                Box(
+                    modifier = Modifier.size(48.dp).align(Alignment.Center)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .alpha(if (hasPending) 0.5f else 1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Apps, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
+                }
+            }
+            if (!isProtected) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(18.dp)
+                        .background(if (hasPending) Color(0xFFE65100) else Color(0xFFE53935), CircleShape)
+                        .clickable { if (hasPending) onCancelPending() else onRemove() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                }
+            } else {
+                Box(
+                    modifier = Modifier.align(Alignment.TopEnd).size(18.dp)
+                        .background(Color(0xFF4CAF50), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(11.dp))
                 }
             }
         }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            appName,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (hasPending) {
+            val hoursLeft = hoursUntil(pendingChange!!.scheduledFor)
+            Text(
+                "~${hoursLeft}h",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFE65100),
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
     }
 }
 
-/** Shows a blocked item. If a pending removal exists, shows an orange warning + cancel instead of the X. */
+@Composable
+fun WebsiteIconGrid(
+    websites: List<String>,
+    pendingChanges: List<PendingChange>,
+    onRemove: (String) -> Unit,
+    onCancelPending: (String) -> Unit,
+    columns: Int = 4
+) {
+    if (websites.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        websites.chunked(columns).forEach { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                row.forEach { site ->
+                    val pending = pendingChanges.firstOrNull { it.value == site }
+                    WebsiteIconItem(
+                        domain = site,
+                        pendingChange = pending,
+                        onRemove = { onRemove(site) },
+                        onCancelPending = { pending?.let { onCancelPending(it.id) } },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+fun WebsiteIconItem(
+    domain: String,
+    pendingChange: PendingChange?,
+    onRemove: () -> Unit,
+    onCancelPending: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var faviconBitmap by remember(domain) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(domain) {
+        faviconBitmap = withContext(Dispatchers.IO) {
+            try {
+                val cleanDomain = domain.removePrefix("www.")
+                val url = java.net.URL("https://www.google.com/s2/favicons?domain=$cleanDomain&sz=64")
+                val conn = url.openConnection()
+                conn.connectTimeout = 5_000
+                conn.readTimeout = 5_000
+                BitmapFactory.decodeStream(conn.getInputStream())?.asImageBitmap()
+            } catch (e: Exception) { null }
+        }
+    }
+    val hasPending = pendingChange != null
+    val displayName = domain.removePrefix("www.").let {
+        if (it.length > 10) it.take(9) + "…" else it
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(modifier = Modifier.size(52.dp)) {
+            if (faviconBitmap != null) {
+                Image(
+                    bitmap = faviconBitmap!!,
+                    contentDescription = domain,
+                    modifier = Modifier.size(48.dp).align(Alignment.Center)
+                        .alpha(if (hasPending) 0.5f else 1f)
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(48.dp).align(Alignment.Center)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .alpha(if (hasPending) 0.5f else 1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Block,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(18.dp)
+                    .background(if (hasPending) Color(0xFFE65100) else Color(0xFFE53935), CircleShape)
+                    .clickable { if (hasPending) onCancelPending() else onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(11.dp))
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            displayName,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (hasPending) {
+            val hoursLeft = hoursUntil(pendingChange!!.scheduledFor)
+            Text(
+                "~${hoursLeft}h",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFE65100),
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
 @Composable
 fun BlockedItemCard(
     text: String,
@@ -1242,10 +2013,13 @@ fun BlockedItemCard(
     onCancelPending: () -> Unit
 ) {
     val hasPending = pendingChange != null
+    val isDark = isSystemInDarkTheme()
+    val pendingBg   = if (isDark) Color(0xFF2D2600) else Color(0xFFFFF3E0)
+    val pendingText = if (isDark) Color(0xFFFFB300) else Color(0xFFE65100)
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (hasPending) Color(0xFFFFF3E0) else Color(0xFFF5F5F5)
+            containerColor = if (hasPending) pendingBg else MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
@@ -1253,14 +2027,15 @@ fun BlockedItemCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            val s = LocalStrings.current
             Column(modifier = Modifier.weight(1f)) {
                 Text(text)
                 if (hasPending) {
                     val hoursLeft = hoursUntil(pendingChange!!.scheduledFor)
                     Text(
-                        "⏳ Removing in ~${hoursLeft}h",
+                        s.removingInHours(hoursLeft),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFE65100)
+                        color = pendingText
                     )
                 }
             }
@@ -1268,7 +2043,7 @@ fun BlockedItemCard(
                 TextButton(
                     onClick = onCancelPending,
                     colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
-                ) { Text("Undo") }
+                ) { Text(s.undo) }
             } else {
                 IconButton(onClick = onRemove) {
                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
@@ -1278,13 +2053,14 @@ fun BlockedItemCard(
     }
 }
 
-/** Shows a pending whitelist addition (not yet active). */
 @Composable
 fun PendingAddCard(text: String, scheduledFor: String, onCancel: () -> Unit) {
+    val s = LocalStrings.current
     val hoursLeft = hoursUntil(scheduledFor)
+    val isDark = isSystemInDarkTheme()
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+        colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF2D2600) else Color(0xFFFFF3E0))
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -1294,15 +2070,15 @@ fun PendingAddCard(text: String, scheduledFor: String, onCancel: () -> Unit) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text)
                 Text(
-                    "⏳ Will be whitelisted in ~${hoursLeft}h",
+                    s.willBeWhitelistedIn(hoursLeft),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFE65100)
+                    color = if (isDark) Color(0xFFFFB300) else Color(0xFFE65100)
                 )
             }
             TextButton(
                 onClick = onCancel,
                 colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF1565C0))
-            ) { Text("Cancel") }
+            ) { Text(s.cancel) }
         }
     }
 }
@@ -1312,7 +2088,7 @@ fun ItemCard(text: String, onRemove: () -> Unit, isProtected: Boolean = false) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isProtected) Color(0xFFE8F5E9) else Color(0xFFF5F5F5)
+            containerColor = if (isProtected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
@@ -1329,7 +2105,7 @@ fun ItemCard(text: String, onRemove: () -> Unit, isProtected: Boolean = false) {
                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
                 }
             } else {
-                Text("Protected", style = MaterialTheme.typography.bodySmall, color = Color(0xFF4CAF50))
+                Text(LocalStrings.current.protected_, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4CAF50))
             }
         }
     }
@@ -1389,7 +2165,7 @@ fun ItemInputWithPicker(
             OutlinedButton(onClick = onPickApp, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Apps, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Pick from Installed Apps")
+                Text(LocalStrings.current.pickFromApps)
             }
         }
     }
@@ -1414,6 +2190,7 @@ fun AppPickerDialog(
         isLoading = false
     }
 
+    val s = LocalStrings.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -1423,7 +2200,7 @@ fun AppPickerDialog(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search apps...") },
+                    placeholder = { Text(s.searchApps) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     singleLine = true
                 )
@@ -1440,7 +2217,7 @@ fun AppPickerDialog(
                         if (apps.isEmpty()) {
                             item {
                                 Text(
-                                    "No apps found",
+                                    s.noAppsFound,
                                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.Gray
@@ -1452,7 +2229,7 @@ fun AppPickerDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(s.cancel) }
         }
     )
 }
@@ -1482,24 +2259,33 @@ fun AppPickerItem(appInfo: AppInfo, onClick: () -> Unit) {
 // HELPERS
 // ==================================
 
-/** Returns approximate hours until the ISO date string. */
+fun openUrlInBrowser(context: Context, url: String) {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val hasInternet = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val network = cm.activeNetwork
+        val caps = network?.let { cm.getNetworkCapabilities(it) }
+        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    } else {
+        @Suppress("DEPRECATION")
+        cm.activeNetworkInfo?.isConnected == true
+    }
+    if (!hasInternet) {
+        Toast.makeText(context, "No internet connection", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Could not open browser", Toast.LENGTH_SHORT).show()
+    }
+}
+
 fun hoursUntil(isoDate: String): Long {
     return try {
         val target = Instant.parse(isoDate)
         val now = Instant.now()
-        val hours = ChronoUnit.HOURS.between(now, target)
-        maxOf(0L, hours)
+        maxOf(0L, ChronoUnit.HOURS.between(now, target))
     } catch (e: Exception) {
         24L
     }
-}
-
-fun formatChangeType(type: String): String = when (type) {
-    "remove_blocked_website" -> "Remove blocked website"
-    "remove_blocked_package" -> "Remove blocked app"
-    "remove_blocked_keyword" -> "Remove blocked keyword"
-    "add_whitelisted_website" -> "Add whitelisted website"
-    "add_whitelisted_package" -> "Add whitelisted app"
-    "disable_deletion_protection" -> "Disable deletion protection"
-    else -> type
 }

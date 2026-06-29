@@ -5,8 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.util.Log
 import com.focusapp.blocker.data.PreferencesManager
+import com.focusapp.blocker.service.BlockingAccessibilityService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,6 +56,49 @@ class PendingChangesReceiver : BroadcastReceiver() {
                         prefs.saveDeletionProtection(false)
                         deactivateDeviceAdmin(context)
                     }
+                    "disable_adult_blocking" -> {
+                        prefs.saveAdultBlockingLevel(0)
+                        BlockingAccessibilityService.adultBlockingLevel = 0
+                    }
+                    "disable_lock" -> {
+                        prefs.saveLockEnabled(false)
+                    }
+                    "unlock_duration" -> {
+                        prefs.saveDurationLocked(false)
+                    }
+                    "unlock_content" -> {
+                        prefs.saveContentLocked(false)
+                    }
+                    "disable_motivation_on_block" -> {
+                        prefs.saveMotivationOnBlock(false)
+                        BlockingAccessibilityService.motivationOnBlock = false
+                    }
+                    "disable_motivation_on_settings" -> {
+                        prefs.saveMotivationOnSettings(false)
+                        BlockingAccessibilityService.motivationOnSettings = false
+                    }
+                    "lower_settings_protection" -> {
+                        val level = change.value?.toIntOrNull() ?: 0
+                        prefs.saveSettingsProtectionLevel(level)
+                        BlockingAccessibilityService.settingsProtectionLevel = level
+                    }
+                    "show_app_icon" -> {
+                        prefs.saveHideAppIcon(false)
+                        context.packageManager.setComponentEnabledSetting(
+                            ComponentName(context, "${context.packageName}.LauncherActivity"),
+                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                            PackageManager.DONT_KILL_APP
+                        )
+                    }
+                    "disable_youtube_shorts_block" -> {
+                        prefs.saveBlockYoutubeShorts(false)
+                        BlockingAccessibilityService.blockYoutubeShorts = false
+                    }
+                    "disable_instagram_reels_block" -> {
+                        prefs.saveBlockInstagramReels(false)
+                        BlockingAccessibilityService.blockInstagramReels = false
+                    }
+                    else -> Log.w("PendingChangesReceiver", "Unknown change type: ${change.type}")
                 }
 
                 prefs.savePendingChanges(changes.filter { it.id != changeId })

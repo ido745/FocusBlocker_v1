@@ -100,6 +100,9 @@ data class AppStrings(
 
     // Pending changes / toggle rows
     val disablingInHours: (Long) -> String,
+    // Used when a setting is being weakened rather than switched off, so the countdown
+    // names the level it is dropping to instead of claiming it is being disabled.
+    val loweringInHours: (String, Long) -> String,
     val scheduledChangesTitle: (Int) -> String,
     val scheduledChangesBody: String,
     val hoursLeft: (Long) -> String,
@@ -261,6 +264,7 @@ val EnglishStrings = AppStrings(
     blockReelsSubtitle = "Redirects to Instagram home when Reels is opened",
 
     disablingInHours = { "⏳ Disabling in ~${it}h" },
+    loweringInHours = { target, h -> "⏳ Switching to $target in ~${h}h" },
     scheduledChangesTitle = { "⏳ Scheduled Changes ($it)" },
     scheduledChangesBody = "These changes will take effect after 24 hours. Tap × to cancel.",
     hoursLeft = { "~${it}h" },
@@ -331,6 +335,7 @@ val EnglishStrings = AppStrings(
         "add_whitelisted_package" to "Add whitelisted app",
         "disable_deletion_protection" to "Disable deletion protection",
         "disable_adult_blocking" to "Disable adult content blocking",
+        "lower_adult_blocking" to "Lower adult content blocking",
         "disable_lock" to "Disable 24h lock",
         "unlock_duration" to "Unlock motivation duration",
         "unlock_content" to "Unlock content protection",
@@ -429,6 +434,7 @@ val HebrewStrings = AppStrings(
     blockReelsSubtitle = "מפנה לדף הבית של Instagram כש-Reels נפתח",
 
     disablingInHours = { "⏳ מתבטל בעוד ~${it}שע׳" },
+    loweringInHours = { target, h -> "⏳ עובר ל\"$target\" בעוד ~${h}שע׳" },
     scheduledChangesTitle = { "⏳ שינויים מתוזמנים ($it)" },
     scheduledChangesBody = "שינויים אלה ייכנסו לתוקף לאחר 24 שעות. הקש × לביטול.",
     hoursLeft = { "~${it}שע׳" },
@@ -499,6 +505,7 @@ val HebrewStrings = AppStrings(
         "add_whitelisted_package" to "הוספת אפליקציה מורשית",
         "disable_deletion_protection" to "ביטול הגנה מפני מחיקה",
         "disable_adult_blocking" to "ביטול חסימת תוכן למבוגרים",
+        "lower_adult_blocking" to "הורדת רמת חסימת תוכן למבוגרים",
         "disable_lock" to "ביטול נעילה ל-24 שעות",
         "unlock_duration" to "שחרור משך המוטיבציה",
         "unlock_content" to "שחרור הגנת תוכן",

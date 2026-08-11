@@ -233,6 +233,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 BlockingAccessibilityService.adultBlockingLevel = 0
                 _uiState.value = _uiState.value.copy(adultBlockingLevel = 0)
             }
+            "lower_adult_blocking" -> {
+                val level = change.value?.toIntOrNull() ?: return
+                preferencesManager.saveAdultBlockingLevel(level)
+                BlockingAccessibilityService.adultBlockingLevel = level
+                _uiState.value = _uiState.value.copy(adultBlockingLevel = level)
+            }
             "disable_lock" -> {
                 preferencesManager.saveLockEnabled(false)
             }
@@ -412,21 +418,52 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val current = _uiState.value.adultBlockingLevel
         if (level == current) return
 
-        // Switching to a non-zero level: cancel any pending disable
-        if (level != 0) {
-            val pendingDisable = _uiState.value.pendingChanges.firstOrNull { it.type == "disable_adult_blocking" }
-            if (pendingDisable != null) cancelPendingChange(pendingDisable.id)
-        }
+        viewModelScope.launch {
+            // Only one pending adult-blocking change may exist at a time. Clearing any
+            // existing one first also means picking a new target replaces the old one
+            // rather than stacking a second delayed downgrade behind it.
+            clearPendingAdultChanges()
 
-        if (level == 0 && current != 0 && _uiState.value.lockEnabled) {
-            queuePendingChange("disable_adult_blocking", null)
-        } else {
-            viewModelScope.launch {
-                preferencesManager.saveAdultBlockingLevel(level)
-                BlockingAccessibilityService.adultBlockingLevel = level
-                _uiState.value = _uiState.value.copy(adultBlockingLevel = level)
+            // Every weakening waits 24 hours, not just turning it off entirely. Going from
+            // restricted (sites + keywords) down to sites-only used to apply instantly,
+            // which was a way around the delay: drop to level 1 now, and the keyword
+            // blocking was gone immediately.
+            if (level < current && _uiState.value.lockEnabled) {
+                if (level == 0) queuePendingChange("disable_adult_blocking", null)
+                else queuePendingChange("lower_adult_blocking", level.toString())
+                return@launch
             }
+
+            preferencesManager.saveAdultBlockingLevel(level)
+            BlockingAccessibilityService.adultBlockingLevel = level
+            _uiState.value = _uiState.value.copy(adultBlockingLevel = level)
         }
+    }
+
+    // Cancels queued adult-blocking downgrades (both kinds) and their alarms, in one pass,
+    // so the caller can immediately queue a replacement without racing the DataStore write.
+    private suspend fun clearPendingAdultChanges() {
+        val existing = preferencesManager.loadPendingChanges()
+        val doomed = existing.filter {
+            it.type == "disable_adult_blocking" || it.type == "lower_adult_blocking"
+        }
+        if (doomed.isEmpty()) return
+        val ctx = getApplication<Application>()
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        doomed.forEach { change ->
+            val pi = PendingIntent.getBroadcast(
+                ctx, change.id.hashCode(),
+                Intent(ctx, PendingChangesReceiver::class.java).apply {
+                    action = PendingChangesReceiver.ACTION_APPLY
+                    putExtra(PendingChangesReceiver.EXTRA_CHANGE_ID, change.id)
+                },
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            )
+            if (pi != null) am.cancel(pi)
+        }
+        val remaining = existing - doomed.toSet()
+        preferencesManager.savePendingChanges(remaining)
+        _uiState.value = _uiState.value.copy(pendingChanges = remaining)
     }
 
     // ================== 24h Lock ==================

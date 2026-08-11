@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Focus Blocker</title>
+<meta name="description" content="Privacy policy for the Focus Blocker Android app. No data is collected, transmitted or shared.">
+<style>
+  /* Everything is inline: no fonts, scripts or images are loaded from anywhere, so the
+     page renders instantly and cannot itself leak a visitor's data to a third party. */
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f7f9;
+    --text: #1a1c1e;
+    --muted: #5b6169;
+    --accent: #3f51b5;
+    --border: #e2e5ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318;
+      --surface: #191c22;
+      --text: #e5e7eb;
+      --muted: #9aa2ad;
+      --accent: #8b95e8;
+      --border: #2a2f38;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 .35rem; letter-spacing: -.02em; }
+  h2 {
+    font-size: 1.2rem; margin: 2.5rem 0 .75rem; letter-spacing: -.01em;
+    padding-top: 1.25rem; border-top: 1px solid var(--border);
+  }
+  .updated { color: var(--muted); font-size: .9rem; margin: 0 0 2rem; }
+  .summary {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 10px; padding: 1rem 1.15rem; margin: 0 0 1rem;
+  }
+  .summary p { margin: 0; }
+  ul { padding-left: 1.25rem; }
+  li { margin: .4rem 0; }
+  code {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 5px; padding: .1rem .35rem; font-size: .9em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-wrap: anywhere;
+  }
+  /* Wide content scrolls inside its own box so the page never scrolls sideways. */
+  .table-wrap { overflow-x: auto; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .94rem; }
+  th, td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--surface); font-weight: 600; }
+  strong { font-weight: 600; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .9rem; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Privacy Policy — Focus Blocker</h1>
+  <p class="updated">Last updated: 11 August 2026</p>
+
+  <div class="summary">
+    <p><strong>Focus Blocker does not collect, transmit or sell any personal data.</strong>
+    There are no accounts, no analytics and no tracking. Everything you configure stays on
+    your device.</p>
+  </div>
+
+  <h2>What the app stores, and where</h2>
+  <p>All of your settings — blocked apps, blocked websites, blocked keywords, whitelists,
+  motivation videos, protection levels and scheduled changes — are stored <strong>only on
+  your device</strong>, in the app's private storage. They are never uploaded. Uninstalling
+  the app deletes them.</p>
+
+  <h2>Screen content and the Accessibility Service</h2>
+  <p>To block distracting apps, websites and settings pages, Focus Blocker uses Android's
+  Accessibility Service, which lets it read what is currently on screen.</p>
+  <p>This is the most sensitive permission the app uses, so to be explicit:</p>
+  <ul>
+    <li>Screen content is examined <strong>entirely on your device</strong>, in memory, as it
+      is read.</li>
+    <li>It is <strong>never</strong> written to a file, never stored, and <strong>never
+      transmitted anywhere</strong>.</li>
+    <li>The component that reads your screen contains no networking code of any kind.</li>
+    <li>Adult-content detection runs a small classifier <strong>on the device</strong>. It is
+      a fixed set of numbers built into the app — there is no cloud service, no lookup, and
+      nothing is sent away for scoring.</li>
+    <li>Text typed into password and input fields is deliberately excluded from analysis.</li>
+  </ul>
+
+  <h2>Network connections</h2>
+  <p>The app makes only these connections, and none of them carry personal data:</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Connection</th><th>Purpose</th><th>What is sent</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>raw.githubusercontent.com</code></td>
+          <td>Downloads a public list of adult domains used for blocking</td>
+          <td>Nothing about you — a plain download</td>
+        </tr>
+        <tr>
+          <td><code>youtube.com</code>, <code>instagram.com</code>, <code>tiktok.com</code></td>
+          <td>Loads the motivation videos <strong>you</strong> chose to add</td>
+          <td>The video links you saved, to display them</td>
+        </tr>
+        <tr>
+          <td>Google Play</td>
+          <td>Processes optional donations</td>
+          <td>Handled entirely by Google Play; the app never sees payment details</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The app does not contact any server operated by us.</p>
+
+  <h2>Donations</h2>
+  <p>Donations are optional and processed by Google Play's billing system. We never receive
+  or store your payment information. See Google's own privacy policy for how Play handles
+  it.</p>
+
+  <h2>Data sharing</h2>
+  <p>We do not share, sell or transfer any data, because we do not collect any.</p>
+
+  <h2>Children</h2>
+  <p>Focus Blocker is not directed at children under 13.</p>
+
+  <h2>Permissions and why they are needed</h2>
+  <ul>
+    <li><strong>Accessibility Service</strong> — detect and block distracting apps, sites and
+      settings pages</li>
+    <li><strong>Display over other apps</strong> — show the blocking screen</li>
+    <li><strong>Device Admin</strong> — optional uninstall protection you can enable and
+      disable</li>
+    <li><strong>Query installed apps</strong> — let you choose which installed apps to
+      block</li>
+    <li><strong>Notifications / foreground service</strong> — keep blocking running in the
+      background</li>
+    <li><strong>Boot completed</strong> — resume blocking after a restart</li>
+    <li><strong>Exact alarms</strong> — apply changes that are on the 24-hour delay</li>
+  </ul>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the date at the top will be updated.</p>
+
+  <h2>Contact</h2>
+  <p><a href="mailto:dodomaimon@gmail.com">dodomaimon@gmail.com</a></p>
+
+  <footer>Focus Blocker · Privacy Policy</footer>
+
+</main>
+</body>
+</html>

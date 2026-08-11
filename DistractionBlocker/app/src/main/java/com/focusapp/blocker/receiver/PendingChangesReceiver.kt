@@ -60,6 +60,16 @@ class PendingChangesReceiver : BroadcastReceiver() {
                         prefs.saveAdultBlockingLevel(0)
                         BlockingAccessibilityService.adultBlockingLevel = 0
                     }
+                    "lower_adult_blocking" -> {
+                        // No `?: 0` fallback here: defaulting a malformed value to 0 would
+                        // silently disable adult blocking entirely instead of stepping it
+                        // down. On a bad value, leave the setting untouched.
+                        val level = change.value?.toIntOrNull()
+                        if (level != null) {
+                            prefs.saveAdultBlockingLevel(level)
+                            BlockingAccessibilityService.adultBlockingLevel = level
+                        }
+                    }
                     "disable_lock" -> {
                         prefs.saveLockEnabled(false)
                     }

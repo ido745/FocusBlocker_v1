@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- notificationTimeout MUST stay 0: any value here is a delay the framework inserts
+     between the user reaching a settings page and us hearing about it. It was 100 ms,
+     which was pure exposure time on the pages the guard defends.
+     typeWindowsChanged is deliberately NOT subscribed: it fires constantly from every
+     package, and acting on it made the shield flap on Settings home. The `windows` API
+     stays available regardless, via flagRetrieveInteractiveWindows below. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="100" />
+    android:notificationTimeout="0" />

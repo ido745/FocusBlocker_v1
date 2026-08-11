@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-policies>
-        <!-- No additional policies needed; being a device admin is enough
-             to require deactivation before the app can be uninstalled. -->
+        <!-- Being a device admin at all is what requires deactivation before uninstall.
+             force-lock additionally lets the guard call DevicePolicyManager.lockNow() as a
+             last-resort eviction when a user keeps fighting their way back to a protected
+             settings page — and as the fallback below Android 9, where the
+             GLOBAL_ACTION_LOCK_SCREEN accessibility action does not exist. -->
+        <force-lock />
     </uses-policies>
 </device-admin>

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -712,10 +713,25 @@ fun SupportHeader() {
 // COFFEE DIALOG
 // ==================================
 
+/**
+ * Compose's LocalContext is not reliably the Activity — inside a Dialog it is usually a
+ * ContextThemeWrapper. `context as? Activity` therefore returns null, and because the
+ * donate buttons were guarded by `activity?.let { ... }` they would have silently done
+ * nothing: taps with no billing sheet, no error, no way to donate. Unwrap instead.
+ */
+private fun Context.findActivity(): Activity? {
+    var ctx = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
+
 @Composable
 fun CoffeeDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = context.findActivity()
     val manager = remember { DonationManager(context) }
     val donationState by manager.state.collectAsState()
     val s = LocalStrings.current
@@ -906,7 +922,9 @@ fun HomePage(
         item {
             AdditionalBlockingCard(
                 adultBlockingLevel = uiState.adultBlockingLevel,
-                adultPendingChange = uiState.pendingChanges.firstOrNull { it.type == "disable_adult_blocking" },
+                adultPendingChange = uiState.pendingChanges.firstOrNull {
+                    it.type == "disable_adult_blocking" || it.type == "lower_adult_blocking"
+                },
                 onAdultLevelChange = { level -> viewModel.setAdultBlockingLevel(level) },
                 onCancelAdultDisable = { change -> viewModel.cancelPendingChange(change.id) },
                 blockYoutubeShorts = uiState.blockYoutubeShorts,
@@ -1332,6 +1350,13 @@ fun AdultBlockingLevelRow(
     val iconColor = Color(0xFFAD1457)
     val pendingColor = Color(0xFFE65100)
     val levels = listOf(s.adultLevelOff, s.adultLevelSites, s.adultLevelStrict)
+    // Which level the queued change will drop to when it fires. "disable" carries no value
+    // and always means off; "lower" carries its target level.
+    val pendingTargetLevel = when (pendingChange?.type) {
+        "lower_adult_blocking" -> pendingChange.value?.toIntOrNull() ?: 0
+        "disable_adult_blocking" -> 0
+        else -> -1
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1353,7 +1378,9 @@ fun AdultBlockingLevelRow(
                 val hoursLeft = hoursUntil(pendingChange.scheduledFor)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        s.disablingInHours(hoursLeft),
+                        // A downgrade is not a disable — name the level it is dropping to.
+                        if (pendingTargetLevel == 0) s.disablingInHours(hoursLeft)
+                        else s.loweringInHours(levels.getOrElse(pendingTargetLevel) { "" }, hoursLeft),
                         style = MaterialTheme.typography.labelSmall,
                         color = pendingColor,
                         fontWeight = FontWeight.Medium
@@ -1369,7 +1396,9 @@ fun AdultBlockingLevelRow(
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 levels.forEachIndexed { idx, label ->
                     val isSelected = idx == level
-                    val isPendingOff = idx == 0 && pendingChange != null
+                    // Highlight whichever level is queued, not just "Off" — a pending
+                    // downgrade to Sites has to show on the Sites chip.
+                    val isPendingOff = idx == pendingTargetLevel
                     val containerColor = when {
                         isPendingOff -> pendingColor.copy(alpha = 0.15f)
                         isSelected -> MaterialTheme.colorScheme.primaryContainer
@@ -1457,6 +1486,7 @@ fun PendingChangesCard(
 ) {
     val displayChanges = pendingChanges.filter {
         it.type != "disable_deletion_protection" && it.type != "disable_adult_blocking" &&
+            it.type != "lower_adult_blocking" &&
             it.type != "disable_lock" && it.type != "unlock_duration" && it.type != "unlock_content" &&
             it.type != "show_app_icon" && it.type != "lower_settings_protection" &&
             it.type != "disable_motivation_on_block" && it.type != "disable_motivation_on_settings"
@@ -1919,6 +1949,18 @@ fun WebsiteIconGrid(
     }
 }
 
+/**
+ * Palette for locally drawn site icons. Picked by a stable hash of the domain, so a given
+ * site always gets the same colour.
+ */
+private val SITE_ICON_COLORS = listOf(
+    Color(0xFF5C6BC0), Color(0xFF26A69A), Color(0xFFEF5350), Color(0xFFAB47BC),
+    Color(0xFF42A5F5), Color(0xFF66BB6A), Color(0xFFFFA726), Color(0xFF8D6E63)
+)
+
+private fun siteIconColor(domain: String): Color =
+    SITE_ICON_COLORS[((domain.hashCode().toLong() and 0x7fffffffL) % SITE_ICON_COLORS.size).toInt()]
+
 @Composable
 fun WebsiteIconItem(
     domain: String,
@@ -1927,19 +1969,12 @@ fun WebsiteIconItem(
     onCancelPending: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var faviconBitmap by remember(domain) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    LaunchedEffect(domain) {
-        faviconBitmap = withContext(Dispatchers.IO) {
-            try {
-                val cleanDomain = domain.removePrefix("www.")
-                val url = java.net.URL("https://www.google.com/s2/favicons?domain=$cleanDomain&sz=64")
-                val conn = url.openConnection()
-                conn.connectTimeout = 5_000
-                conn.readTimeout = 5_000
-                BitmapFactory.decodeStream(conn.getInputStream())?.asImageBitmap()
-            } catch (e: Exception) { null }
-        }
-    }
+    // Icons are drawn on device from the domain's first letter.
+    //
+    // This used to fetch google.com/s2/favicons?domain=… for every entry, which handed Google
+    // a list of every site the user blocks or whitelists — adult ones included — tied to
+    // their IP. It was the only place user data left the device, and it would have had to be
+    // declared as data sharing on Play's Data Safety form. Nothing is fetched now.
     val hasPending = pendingChange != null
     val displayName = domain.removePrefix("www.").let {
         if (it.length > 10) it.take(9) + "…" else it
@@ -1950,27 +1985,18 @@ fun WebsiteIconItem(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(modifier = Modifier.size(52.dp)) {
-            if (faviconBitmap != null) {
-                Image(
-                    bitmap = faviconBitmap!!,
-                    contentDescription = domain,
-                    modifier = Modifier.size(48.dp).align(Alignment.Center)
-                        .alpha(if (hasPending) 0.5f else 1f)
+            Box(
+                modifier = Modifier.size(48.dp).align(Alignment.Center)
+                    .background(siteIconColor(domain), RoundedCornerShape(12.dp))
+                    .alpha(if (hasPending) 0.5f else 1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = domain.removePrefix("www.").take(1).uppercase().ifBlank { "?" },
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
                 )
-            } else {
-                Box(
-                    modifier = Modifier.size(48.dp).align(Alignment.Center)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                        .alpha(if (hasPending) 0.5f else 1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.Block,
-                        null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
             }
             Box(
                 modifier = Modifier

@@ -1,6 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Upload-key credentials live in keystore.properties, which is gitignored along with the
+// .jks itself. Nothing secret belongs in this file or in version control. If the file is
+// absent the release build simply stays unsigned, so a fresh clone still builds.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) FileInputStream(keystorePropsFile).use { load(it) }
 }
 
 android {
@@ -11,16 +22,34 @@ android {
         applicationId = "com.focusapp.blocker"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0"
+        // Play rejects an upload whose versionCode is already used. Bumped for this release.
+        versionCode = 3
+        versionName = "1.1"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (keystorePropsFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            // Left off deliberately for this release: the app reaches MIUI-specific APIs by
+            // reflection (AppOps autostart/background-popup checks), which R8 can break in
+            // ways that only show up on device. Worth enabling later, with testing.
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

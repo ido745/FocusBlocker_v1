@@ -65,7 +65,43 @@ class FocusBlockerForegroundService : Service() {
     private val watchdogRunnable = object : Runnable {
         override fun run() {
             restoreAccessibilityIfMissing()
-            watchdogHandler.postDelayed(this, 2_000)
+            nagIfAccessibilityMissing()
+            watchdogHandler.postDelayed(this, 1_000)
+        }
+    }
+
+    private var lastNagMs = 0L
+
+    private fun accessibilityServiceEnabled(): Boolean {
+        val expected = ComponentName(
+            packageName, "com.focusapp.blocker.service.BlockingAccessibilityService"
+        ).flattenToString()
+        val current = Settings.Secure.getString(
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: ""
+        return current.split(":").any { it.equals(expected, ignoreCase = true) }
+    }
+
+    /**
+     * Self-heal for devices that are not Device Owner, where we cannot write the setting
+     * back ourselves. If the guard was expected to be running and has been switched off,
+     * drag the user straight back into the app, once a second, indefinitely.
+     *
+     * This is the layer that makes winning the race worthless: even a successful toggle
+     * buys nothing, because the app is back in the foreground before the settings page is.
+     */
+    private fun nagIfAccessibilityMissing() {
+        try {
+            val expected = getSharedPreferences("focus_guard", Context.MODE_PRIVATE)
+                .getBoolean("guard_expected", false)
+            if (!expected || accessibilityServiceEnabled()) return
+            val now = System.currentTimeMillis()
+            if (now - lastNagMs < 1_000) return
+            lastNagMs = now
+            android.util.Log.w("FocusFGService", "⚠️ Accessibility service disabled — recalling app")
+            launchMainActivity(this)
+        } catch (e: Exception) {
+            android.util.Log.e("FocusFGService", "Nag failed: ${e.message}")
         }
     }
 

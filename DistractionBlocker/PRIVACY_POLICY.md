@@ -70,4 +70,4 @@ If this policy changes, the date at the top will be updated.
 
 ## Contact
 
-dodomaimon@gmail.com
+Questions about this policy or about your data: focusblocker2026@gmail.com

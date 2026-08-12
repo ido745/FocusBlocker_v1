@@ -1437,7 +1437,12 @@ fun MotivationWebView(url: String, onVideoEnded: () -> Unit = {}) {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     mediaPlaybackRequiresUserGesture = false
-                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    // NEVER_ALLOW, not ALWAYS_ALLOW: every embed host (YouTube, Instagram,
+                    // TikTok) is HTTPS, so nothing needs insecure loads — and allowing them
+                    // would let a network attacker inject script into the player page. It
+                    // also contradicts the "encrypted in transit" answer on Play's Data
+                    // Safety form, which should be true by construction, not by luck.
+                    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     loadWithOverviewMode = true
                     useWideViewPort = true
                     setSupportZoom(false)

@@ -55,25 +55,23 @@ class PreferencesManager(private val context: Context) {
         preferences[SERVER_URL] ?: "https://focus-blocker-backend.onrender.com"
     }
 
+    // These MUST default to empty, and must agree with loadCachedConfig() below.
+    //
+    // They used to default to Instagram/Facebook/Twitter/Reddit and the keywords
+    // gambling/casino/bet. Because loadCachedConfig() — which populates the UI — defaulted
+    // to emptySet() while these Flows — which the accessibility service collects — did not,
+    // a new install silently blocked four sites, three apps and three keywords that the user
+    // never chose AND could not see listed anywhere in the app to remove.
     val blockedPackages: Flow<Set<String>> = context.dataStore.data.map { preferences ->
-        preferences[BLOCKED_PACKAGES] ?: setOf(
-            "com.instagram.android",
-            "com.facebook.katana",
-            "com.twitter.android"
-        )
+        preferences[BLOCKED_PACKAGES] ?: emptySet()
     }
 
     val blockedKeywords: Flow<Set<String>> = context.dataStore.data.map { preferences ->
-        preferences[BLOCKED_KEYWORDS] ?: setOf("gambling", "casino", "bet")
+        preferences[BLOCKED_KEYWORDS] ?: emptySet()
     }
 
     val blockedWebsites: Flow<Set<String>> = context.dataStore.data.map { preferences ->
-        preferences[BLOCKED_WEBSITES] ?: setOf(
-            "facebook.com",
-            "instagram.com",
-            "twitter.com",
-            "reddit.com"
-        )
+        preferences[BLOCKED_WEBSITES] ?: emptySet()
     }
 
     val whitelistedPackages: Flow<Set<String>> = context.dataStore.data.map { preferences ->

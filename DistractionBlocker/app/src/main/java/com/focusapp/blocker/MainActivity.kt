@@ -82,6 +82,7 @@ import com.focusapp.blocker.data.PendingChange
 import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
 import com.focusapp.blocker.service.BlockingAccessibilityService
 import com.focusapp.blocker.service.FocusBlockerForegroundService
+import com.focusapp.blocker.ui.AccessibilityDisclosureDialog
 import com.focusapp.blocker.ui.AppInfo
 import com.focusapp.blocker.ui.AppPickerHelper
 import com.focusapp.blocker.ui.AppStrings
@@ -160,6 +161,10 @@ class MainActivity : ComponentActivity() {
 
     private val pendingMotivationUrl = mutableStateOf<String?>(null)
 
+    // Gate in front of every accessibility-permission request. Activity-scoped so any entry
+    // point into the setup flow goes through the disclosure.
+    private val showA11yDisclosure = mutableStateOf(false)
+
     private val adminLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -236,6 +241,16 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background
                     ) {
+                        if (showA11yDisclosure.value) {
+                            AccessibilityDisclosureDialog(
+                                onAccept = {
+                                    showA11yDisclosure.value = false
+                                    openAccessibilitySettings()
+                                },
+                                onDismiss = { showA11yDisclosure.value = false }
+                            )
+                        }
+
                         when {
                             termsVersion == -1 -> Box(Modifier.fillMaxSize())
                             termsVersion < TERMS_VERSION -> TermsScreen(onAccepted = { viewModel.acceptTerms(TERMS_VERSION) })
@@ -243,7 +258,10 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 pendingMotivationUrl = pendingMotivationUrl.value,
                                 onMotivationUrlConsumed = { pendingMotivationUrl.value = null },
-                                onOpenAccessibilitySettings = { openAccessibilitySettings() },
+                                // Routed through the disclosure rather than straight to
+                                // settings — Play requires the explanation to precede the
+                                // permission request, every time, from wherever it starts.
+                                onOpenAccessibilitySettings = { showA11yDisclosure.value = true },
                                 isServiceEnabled = { isAccessibilityServiceEnabled() },
                                 isBatteryOptimizationIgnored = { isBatteryOptimizationIgnored() },
                                 onRequestBatteryExclusion = { requestBatteryOptimizationExclusion() },
@@ -442,6 +460,13 @@ class MainActivity : ComponentActivity() {
     }
 
     fun requestDeviceAdmin() {
+        // Opens the system Device Admin page, which lives in the Settings package and names
+        // this app — so settings protection treats it as a page to evict. Every other
+        // app-initiated settings launch opens this grant window first; this one was missed,
+        // which made it impossible to turn deletion protection ON while settings protection
+        // was active. Reaching the same page from anywhere else is still blocked, because
+        // the window is only opened here, immediately before the launch.
+        BlockingAccessibilityService.openedFromApp = true
         val adminComponent = ComponentName(this, FocusDeviceAdminReceiver::class.java)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
             putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
@@ -995,7 +1020,9 @@ fun BlockPage(viewModel: AuthViewModel, uiState: com.focusapp.blocker.ui.AppUiSt
             Text(s.blockedWebsitesTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         }
         item {
-            ItemInputSection(placeholder = "facebook.com", onAdd = { viewModel.addBlockedWebsite(it) })
+            // example.com is reserved by IANA (RFC 2606) precisely for documentation and
+            // examples, so it carries no trademark and can't imply any affiliation.
+            ItemInputSection(placeholder = "example.com", onAdd = { viewModel.addBlockedWebsite(it) })
         }
         item {
             WebsiteIconGrid(

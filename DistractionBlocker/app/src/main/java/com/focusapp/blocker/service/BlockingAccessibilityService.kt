@@ -70,7 +70,7 @@ class BlockingAccessibilityService : AccessibilityService() {
 
         // English phrases kept as a supplementary signal on top of the structural checks.
         private val DIRECT_PERMISSION_MARKERS = listOf(
-            "use focus blocker", "installed services", "force stop", "uninstall",
+            "use lockin", "installed services", "force stop", "uninstall",
             "autostart", "auto start", "background popup", "display pop-up",
             "pop-up windows", "background start activity"
         )
@@ -116,7 +116,7 @@ class BlockingAccessibilityService : AccessibilityService() {
             packageManager.getApplicationLabel(
                 packageManager.getApplicationInfo(packageName, 0)
             ).toString()
-        } catch (_: Exception) { "Focus Blocker" }
+        } catch (_: Exception) { "LockIn" }
     }
 
     // ─────────────────────────── THE SHIELD ───────────────────────────

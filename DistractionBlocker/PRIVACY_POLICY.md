@@ -1,10 +1,10 @@
-# Privacy Policy — Focus Blocker
+# Privacy Policy — LockIn
 
 **Last updated:** 11 August 2026
 
 ## Summary
 
-Focus Blocker does not collect, transmit or sell any personal data. There are no accounts,
+LockIn does not collect, transmit or sell any personal data. There are no accounts,
 no analytics, and no tracking. Everything you configure stays on your device.
 
 ## What the app stores, and where
@@ -16,7 +16,7 @@ deletes them.
 
 ## Screen content and the Accessibility Service
 
-To block distracting apps, websites and settings pages, Focus Blocker uses Android's
+To block distracting apps, websites and settings pages, LockIn uses Android's
 Accessibility Service, which lets it read what is currently on screen.
 
 This is the most sensitive permission the app uses, so to be explicit:
@@ -52,7 +52,7 @@ We do not share, sell or transfer any data, because we do not collect any.
 
 ## Children
 
-Focus Blocker is not directed at children under 13.
+LockIn is not directed at children under 13.
 
 ## Permissions and why they are needed
 

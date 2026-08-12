@@ -22,9 +22,10 @@ android {
         applicationId = "com.focusapp.blocker"
         minSdk = 24
         targetSdk = 35
-        // Play rejects an upload whose versionCode is already used. Bumped for this release.
-        versionCode = 3
-        versionName = "1.1"
+        // Play rejects an upload whose versionCode is already used — and uploading counts,
+        // even to a test track that was never rolled out. 3 (1.1) is already taken.
+        versionCode = 10
+        versionName = "1.8"
 
         vectorDrawables {
             useSupportLibrary = true

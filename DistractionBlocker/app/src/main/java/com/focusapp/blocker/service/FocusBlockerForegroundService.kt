@@ -23,7 +23,7 @@ import com.focusapp.blocker.receiver.FocusDeviceAdminReceiver
 /**
  * A persistent foreground service that keeps the app process alive.
  * This prevents Android from killing the accessibility service when the user
- * closes the main app. The notification shows "Focus Blocker is active."
+ * closes the main app. The notification shows "LockIn is active."
  */
 class FocusBlockerForegroundService : Service() {
 
@@ -217,7 +217,7 @@ class FocusBlockerForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Focus Blocker Active")
+            .setContentTitle("LockIn Active")
             .setContentText("Blocking distractions in the background")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
@@ -231,10 +231,10 @@ class FocusBlockerForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Focus Blocker Service",
+            "LockIn Service",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Keeps Focus Blocker running in the background"
+            description = "Keeps LockIn running in the background"
             setShowBadge(false)
         }
         val manager = getSystemService(NotificationManager::class.java)

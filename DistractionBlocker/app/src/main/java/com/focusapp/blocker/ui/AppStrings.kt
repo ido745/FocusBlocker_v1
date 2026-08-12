@@ -51,6 +51,26 @@ data class AppStrings(
     val enablePermTitle: String,
     val enablePermBody: String,
     val openAccessibilitySettings: String,
+
+    // Prominent disclosure for the Accessibility Service. Google Play requires this to be
+    // shown inside the app, before the permission is requested, in plain language, with an
+    // affirmative action to continue — and it must not live only in a terms of service.
+    val a11yDisclosureTitle: String,
+    val a11yDisclosureWhat: String,
+    val a11yDisclosureHow: String,
+    val a11yDisclosurePrivacy: String,
+    val a11yDisclosureAccept: String,
+
+    // Legal screen (links out to the hosted documents)
+    val legalTitle: String,
+    val legalIntro: String,
+    val legalSummaryPermissions: String,
+    val legalSummaryPrivacy: String,
+    val legalSummaryDonations: String,
+    val legalReadTerms: String,
+    val legalReadPrivacy: String,
+    val legalAgree: String,
+    val legalContinue: String,
     val batteryOptTitle: String,
     val batteryOptBody: String,
     val disableBatteryOpt: String,
@@ -216,10 +236,33 @@ val EnglishStrings = AppStrings(
     tipsUnavailable = "In-app tips aren't available on this device.",
 
     enablePermTitle = "⚠️ Enable Permissions",
-    enablePermBody = "1. Tap the button below\n2. Go to \"Downloaded apps → Focus Blocker\"\n3. Toggle \"Use Focus Blocker\" ON",
+    enablePermBody = "1. Tap the button below\n2. Go to \"Downloaded apps → LockIn\"\n3. Toggle \"Use LockIn\" ON",
     openAccessibilitySettings = "Open Accessibility Settings",
+
+    a11yDisclosureTitle = "LockIn needs the Accessibility Service",
+    a11yDisclosureWhat = "To block the apps and websites you choose, LockIn needs to see " +
+        "which app or page is currently on your screen.",
+    a11yDisclosureHow = "It uses this only to recognise something you asked it to block, and to " +
+        "close it. Nothing else.",
+    a11yDisclosurePrivacy = "This happens entirely on your device. Screen content is never " +
+        "stored, never sent anywhere, and never shared with anyone — including us.",
+    a11yDisclosureAccept = "I understand — open settings",
+
+    legalTitle = "Before you continue",
+    legalIntro = "LockIn is a self-control tool. Here's the short version, with the " +
+        "full documents online.",
+    legalSummaryPermissions = "It needs powerful Android permissions to block apps and sites. " +
+        "You grant each one yourself, and you can revoke any of them at any time.",
+    legalSummaryPrivacy = "No accounts, no analytics, no tracking. Your settings and anything " +
+        "read from your screen stay on your device.",
+    legalSummaryDonations = "Donations are optional gifts. They unlock nothing, and they are " +
+        "not refundable.",
+    legalReadTerms = "Terms of Service",
+    legalReadPrivacy = "Privacy Policy",
+    legalAgree = "I have read and agree to the Terms of Service and Privacy Policy",
+    legalContinue = "Continue",
     batteryOptTitle = "⚡ Battery Optimization",
-    batteryOptBody = "Android may stop blocking after 1-2 days unless battery optimization is disabled. Tap below → find Focus Blocker under \"Active apps\" → tap \"Put apps to sleep\" → then tap it again under \"Sleeping apps\" → select \"No restrictions\".",
+    batteryOptBody = "Android may stop blocking after 1-2 days unless battery optimization is disabled. Tap below → find LockIn under \"Active apps\" → tap \"Put apps to sleep\" → then tap it again under \"Sleeping apps\" → select \"No restrictions\".",
     disableBatteryOpt = "Disable Battery Optimization",
     overlayPermTitle = "🪟 Display Pop-up Permission",
     overlayPermBody = "Required so the app can reopen itself when you try to access protected settings. Tap below and enable \"Display pop-up windows\".",
@@ -386,10 +429,30 @@ val HebrewStrings = AppStrings(
     tipsUnavailable = "טיפים באפליקציה אינם זמינים במכשיר זה.",
 
     enablePermTitle = "⚠️ הפעל הרשאות",
-    enablePermBody = "1. הקש על הכפתור למטה\n2. עבור אל \"אפליקציות שהורדת ← Focus Blocker\"\n3. הפעל \"שימוש ב-Focus Blocker\"",
+    enablePermBody = "1. הקש על הכפתור למטה\n2. עבור אל \"אפליקציות שהורדת ← LockIn\"\n3. הפעל \"שימוש ב-LockIn\"",
     openAccessibilitySettings = "פתח הגדרות נגישות",
+
+    a11yDisclosureTitle = "‏LockIn זקוק לשירות הנגישות",
+    a11yDisclosureWhat = "כדי לחסום את האפליקציות והאתרים שבחרת, ‏LockIn צריך לראות איזו " +
+        "אפליקציה או עמוד מוצגים כעת על המסך.",
+    a11yDisclosureHow = "המידע משמש אך ורק כדי לזהות תוכן שביקשת לחסום ולסגור אותו. לשום דבר אחר.",
+    a11yDisclosurePrivacy = "הכול מתבצע במכשיר שלך בלבד. תוכן המסך אינו נשמר, אינו נשלח לשום מקום " +
+        "ואינו משותף עם אף אחד — כולל איתנו.",
+    a11yDisclosureAccept = "הבנתי — פתח הגדרות",
+
+    legalTitle = "לפני שממשיכים",
+    legalIntro = "‏LockIn הוא כלי לשליטה עצמית. הנה התקציר, והמסמכים המלאים באינטרנט.",
+    legalSummaryPermissions = "האפליקציה זקוקה להרשאות אנדרואיד חזקות כדי לחסום אפליקציות ואתרים. " +
+        "אתה מעניק כל הרשאה בעצמך, וניתן לבטל אותן בכל עת.",
+    legalSummaryPrivacy = "אין חשבונות, אין אנליטיקה, אין מעקב. ההגדרות שלך וכל מה שנקרא מהמסך " +
+        "נשארים במכשיר שלך.",
+    legalSummaryDonations = "התרומות הן מתנה בהתנדבות. הן אינן פותחות שום תוכן ואינן ניתנות להחזר.",
+    legalReadTerms = "תנאי השימוש",
+    legalReadPrivacy = "מדיניות הפרטיות",
+    legalAgree = "קראתי ואני מסכים לתנאי השימוש ולמדיניות הפרטיות",
+    legalContinue = "המשך",
     batteryOptTitle = "⚡ אופטימיזציית סוללה",
-    batteryOptBody = "Android עשוי להפסיק את החסימה לאחר יום-יומיים אלא אם תבטל אופטימיזציית סוללה. הקש למטה ← מצא את Focus Blocker תחת \"יישומים פעילים\" ← הקש \"הרדם יישומים\" ← הקש עליה שוב תחת \"יישומים במצב שינה\" ← בחר \"אין הגבלות\".",
+    batteryOptBody = "Android עשוי להפסיק את החסימה לאחר יום-יומיים אלא אם תבטל אופטימיזציית סוללה. הקש למטה ← מצא את LockIn תחת \"יישומים פעילים\" ← הקש \"הרדם יישומים\" ← הקש עליה שוב תחת \"יישומים במצב שינה\" ← בחר \"אין הגבלות\".",
     disableBatteryOpt = "בטל אופטימיזציית סוללה",
     overlayPermTitle = "🪟 הרשאת חלון קופץ",
     overlayPermBody = "נדרש כדי שהאפליקציה תוכל לפתוח את עצמה כשמנסים לגשת להגדרות מוגנות. הקש למטה ואפשר \"הצג חלונות קופצים\".",

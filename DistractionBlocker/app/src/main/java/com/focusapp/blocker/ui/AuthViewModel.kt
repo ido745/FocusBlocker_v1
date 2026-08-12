@@ -587,7 +587,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 "App Access",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Tap to open Focus Blocker while its icon is hidden"
+                description = "Tap to open LockIn while its icon is hidden"
                 setShowBadge(false)
             }
             nm.createNotificationChannel(channel)
@@ -601,7 +601,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         )
         val notification = NotificationCompat.Builder(ctx, HIDDEN_ICON_CHANNEL_ID)
             .setSmallIcon(com.focusapp.blocker.R.mipmap.ic_launcher)
-            .setContentTitle("Focus Blocker")
+            .setContentTitle("LockIn")
             .setContentText("Tap here to open the app — icon is hidden")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -694,6 +694,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val triggerAt = Instant.parse(change.scheduledFor).toEpochMilli()
+        // No SCHEDULE_EXACT_ALARM: Play restricts exact alarms, and this timer does not need
+        // them. canScheduleExactAlarms() is false without the permission, so this takes the
+        // inexact path, which fires within minutes of the target — irrelevant on a 24-hour
+        // delay. It also fails in the safe direction: a late alarm means protection stays on
+        // slightly longer, never that it lifts early. And applyMaturePendingChanges() applies
+        // anything overdue whenever the app opens, so a missed alarm cannot strand a change.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
         } else {
